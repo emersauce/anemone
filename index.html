@@ -3,351 +3,545 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Anemone Reef - Top View</title>
+    <title>Anemone Sea</title>
+    <!-- CDNs for React, Babel (for JSX), and Tailwind -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        :root {
-            /* Light Mode (Sunlit Reef) */
-            --bg-light: #76d7ea;
-            --text-light: #005f6b;
-            
-            /* Dark Mode (Bioluminescent Abyss) */
-            --bg-dark: #020810;
-            --text-dark: #a0fbff;
+        @font-face {
+            font-family: 'OpenDyslexic';
+            src: url('https://antijingoist.github.io/web-fonts/OpenDyslexic/OpenDyslexic-Regular.otf') format('opentype');
+            font-weight: normal; font-style: normal;
         }
-
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: var(--bg-light);
-            transition: background 2s ease;
+        body { margin: 0; overflow: hidden; background: #FDFBF0; }
+        .font-dyslexic { font-family: 'OpenDyslexic', sans-serif !important; }
+        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { 
+            background: rgba(0,0,0,0.1); 
+            border-radius: 10px; 
         }
-
-        #container {
-            width: 100vw;
-            height: 100vh;
-            position: relative;
-            cursor: none;
-        }
-
-        canvas {
-            display: block;
-        }
-
-        #ui {
-            position: absolute;
-            top: 30px;
-            left: 30px;
-            font-family: 'Palatino', 'Georgia', serif;
-            letter-spacing: 0.2em;
-            pointer-events: none;
-            opacity: 0.6;
-            z-index: 10;
-        }
-
-        .hint {
-            font-size: 0.7rem;
-            font-style: italic;
-            text-transform: uppercase;
-            margin-top: 5px;
+        .dark-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(160,251,255,0.1);
         }
     </style>
 </head>
 <body>
+    <div id="root"></div>
 
-<div id="container">
-    <div id="ui">
-        <h1>REEF</h1>
-        <div class="hint">looking down into the drift</div>
-    </div>
-    <canvas id="artCanvas"></canvas>
-</div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
 
-<script>
-    const canvas = document.getElementById('artCanvas');
-    const ctx = canvas.getContext('2d');
-    const ui = document.getElementById('ui');
+        // --- GITHUB API CONFIGURATION ---
+        // Replace these with your public repository details
+        const GITHUB_CONFIG = {
+            owner: 'emersauce', // e.g., 'octocat'
+            repo: 'anemone',      // e.g., 'my-drifts'
+            path: 'drifts',         // The folder containing .md files
+            branch: 'network'          // Usually 'main' or 'master'
+        };
 
-    let width, height;
-    let anemones = [];
-    let mouse = { x: -1000, y: -1000, active: false, angle: 0 };
-    let time = 0;
-    let isDark = false;
+        const renderMarkdown = (text) => {
+            if (!text) return "";
+            return text
+                // Headers: no italics, no borders, font-normal
+                .replace(/^### (.*$)/gim, '<h3 class="text-lg font-serif mt-4 mb-1 text-slate-600 font-normal">$1</h3>')
+                .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-5 mb-1 text-slate-800 font-normal">$1</h2>')
+                .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-serif mb-2 text-slate-900 font-normal">$1</h1>')
+                .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+                .replace(/\*(.*)\*/gim, '<em>$1</em>')
+                .replace(/\n/gim, '<br />');
+        };
 
-    const palettes = {
-        light: [
-            { base: '#ffb6c1', glow: '#fff0f5' }, // Morganite
-            { base: '#87ceeb', glow: '#f0ffff' }, // Aquamarine
-            { base: '#e6e6fa', glow: '#ffffff' }, // Lavender
-            { base: '#f0e68c', glow: '#fffde7' }, // Heliodor
-            { base: '#98fb98', glow: '#f1fff1' }  // Peridot
-        ],
-        dark: [
-            { base: '#9400d3', glow: '#e0b0ff' }, // Amethyst
-            { base: '#00ced1', glow: '#b2ffff' }, // Phosphophyllite
-            { base: '#ff1493', glow: '#ffb6c1' }, // Cinnabar
-            { base: '#4169e1', glow: '#a2b9ff' }, // Sapphire
-            { base: '#00fa9a', glow: '#baffda' }  // Jade
-        ]
-    };
-
-    function checkTheme() {
-        const hour = new Date().getHours();
-        const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        const isNight = hour >= 19 || hour <= 6;
-        isDark = systemPrefersDark || isNight;
-
-        if (isDark) {
-            document.body.style.background = 'var(--bg-dark)';
-            ui.style.color = 'var(--text-dark)';
-        } else {
-            document.body.style.background = 'var(--bg-light)';
-            ui.style.color = 'var(--text-light)';
-        }
-    }
-
-    class TentacleSegment {
-        constructor(x, y, len, angle) {
-            this.x = x;
-            this.y = y;
-            this.len = len;
-            this.angle = angle;
-            this.currentAngle = angle;
-        }
-    }
-
-    class Anemone {
-        constructor(x, y, colorData) {
-            this.x = x;
-            this.y = y;
-            this.color = colorData.base;
-            this.glow = colorData.glow;
-            this.tentacles = [];
-            const count = 25 + Math.floor(Math.random() * 15);
-            
-            for (let i = 0; i < count; i++) {
-                const angle = (Math.PI * 2 / count) * i;
-                const segments = [];
-                const segCount = 6 + Math.floor(Math.random() * 4);
-                const segLen = 8 + Math.random() * 6;
-                
-                for (let j = 0; j < segCount; j++) {
-                    segments.push(new TentacleSegment(x, y, segLen, angle));
-                }
-                this.tentacles.push({ segments, baseAngle: angle });
+        // --- Physics Classes ---
+        class TentacleSegment {
+            constructor(x, y, len, angle) {
+                this.x = x; this.y = y;
+                this.len = len;
+                this.currentAngle = angle;
+                this.targetX = x;
+                this.targetY = y;
             }
         }
 
-        update(time) {
-            this.tentacles.forEach(t => {
-                let lastX = this.x;
-                let lastY = this.y;
+        class AnemoneNode {
+            constructor(id, x, y, palette, paletteIndex) {
+                this.id = id;
+                this.x = x; this.y = y;
+                this.baseX = x; this.baseY = y;
+                this.paletteIndex = paletteIndex;
+                this.color = palette.base;
+                this.glow = palette.glow;
+                this.scale = 0.8 + Math.random() * 0.75;
+                this.noiseSeed = Math.random() * 1000;
+                this.tentacles = [];
+                this.spawnTime = performance.now();
+                
+                const count = 26 + Math.floor(Math.random() * 12);
+                for (let i = 0; i < count; i++) {
+                    const angle = (Math.PI * 2 / count) * i;
+                    const segments = [];
+                    const segCount = 6 + Math.floor(Math.random() * 5);
+                    const segLen = (8 + Math.random() * 6) * this.scale;
+                    for (let j = 0; j < segCount; j++) {
+                        segments.push(new TentacleSegment(x, y, segLen, angle));
+                    }
+                    this.tentacles.push({ segments, baseAngle: angle });
+                }
+            }
 
-                t.segments.forEach((seg, i) => {
-                    const swirl = Math.sin(time * 0.0003 + this.x * 0.01) * 0.15;
-                    const wave = Math.sin(time * 0.0005 + i * 0.4 + t.baseAngle) * 0.1;
+            update(time, mouse) {
+                const driftX = Math.sin(time * 0.00008 + this.baseX) * 4;
+                const driftY = Math.cos(time * 0.00006 + this.baseY) * 3;
+                this.x = this.baseX + driftX;
+                this.y = this.baseY + driftY;
+
+                const dx = this.x - mouse.x;
+                const dy = this.y - mouse.y;
+                const hovered = Math.sqrt(dx*dx + dy*dy) < (120 * this.scale);
+
+                this.tentacles.forEach(t => {
+                    let lastX = this.x;
+                    let lastY = this.y;
+                    t.segments.forEach((seg, i) => {
+                        const swirl = Math.sin(time * 0.00015 + this.x * 0.01) * 0.06;
+                        const wave = Math.sin(time * 0.0003 + i * 0.3 + t.baseAngle) * 0.04;
+                        let mdx = seg.x - mouse.x, mdy = seg.y - mouse.y, dist = Math.sqrt(mdx*mdx + mdy*mdy);
+                        let avoidAngle = (dist < 160 && dist > 5) ? Math.atan2(mdy, mdx) * ((180 - dist) * 0.0012) : 0;
+
+                        const targetAngle = t.baseAngle + swirl + wave + avoidAngle;
+                        let diff = targetAngle - seg.currentAngle;
+                        while (diff < -Math.PI) diff += Math.PI * 2;
+                        while (diff > Math.PI) diff -= Math.PI * 2;
+                        
+                        seg.currentAngle += diff * 0.025; 
+                        seg.x = lastX; seg.y = lastY;
+                        seg.targetX = seg.x + Math.cos(seg.currentAngle) * seg.len;
+                        seg.targetY = seg.y + Math.sin(seg.currentAngle) * seg.len;
+                        lastX = seg.targetX; lastY = seg.targetY;
+                    });
+                });
+                return hovered;
+            }
+
+            draw(ctx, isDark, isSelected, now) {
+                const age = now - this.spawnTime;
+                const fadeInAlpha = Math.min(1, age / 250); 
+
+                ctx.save();
+                ctx.globalAlpha = fadeInAlpha;
+                
+                const coreSize = 40 * this.scale;
+                const coreGrad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, coreSize);
+                coreGrad.addColorStop(0, this.color);
+                coreGrad.addColorStop(1, 'transparent');
+                ctx.fillStyle = coreGrad;
+                ctx.globalAlpha = (isSelected ? 0.4 : 0.2) * fadeInAlpha;
+                ctx.beginPath(); ctx.arc(this.x, this.y, coreSize, 0, Math.PI * 2); ctx.fill();
+
+                this.tentacles.forEach(t => {
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    t.segments.forEach(seg => ctx.lineTo(seg.targetX, seg.targetY));
+                    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                    ctx.lineWidth = 7 * this.scale;
+                    ctx.strokeStyle = this.color;
                     
-                    let dx = seg.x - mouse.x;
-                    let dy = seg.y - mouse.y;
-                    let dist = Math.sqrt(dx*dx + dy*dy);
-                    let avoidAngle = 0;
+                    if (isDark) {
+                        ctx.shadowBlur = 12; ctx.shadowColor = this.color;
+                        ctx.globalAlpha = (isSelected ? 1.0 : 0.75) * fadeInAlpha;
+                    } else {
+                        ctx.shadowBlur = 0;
+                        ctx.globalAlpha = (isSelected ? 1.0 : 0.6) * fadeInAlpha;
+                    }
+                    ctx.stroke();
+
+                    const tip = t.segments[t.segments.length - 1];
+                    ctx.beginPath();
+                    ctx.arc(tip.targetX, tip.targetY, 2.2 * this.scale, 0, Math.PI * 2);
+                    ctx.fillStyle = isDark ? this.glow : 'rgba(255,255,255,0.8)';
+                    ctx.fill();
+                });
+                ctx.restore();
+            }
+        }
+
+        const App = () => {
+            const reefCanvasRef = useRef(null);
+            const cursorCanvasRef = useRef(null);
+            const labelRefs = useRef({});
+            
+            // Starts empty
+            const [notes, setNotes] = useState([]);
+            
+            const [selectedNote, setSelectedNote] = useState(null);
+            const [hoveredNodeId, setHoveredNodeId] = useState(null);
+            const [isListOpen, setIsListOpen] = useState(false);
+            const [isDark, setIsDark] = useState(false); 
+            const isDarkRef = useRef(false);
+
+            const [isSyncVisible, setIsSyncVisible] = useState(false);
+            const [passwordValue, setPasswordValue] = useState("");
+            const [passwordError, setPasswordError] = useState(false);
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [syncStatus, setSyncStatus] = useState('Standby');
+
+            const mouseRef = useRef({ x: -1000, y: -1000, angle: 0, active: false });
+            const anemonesRef = useRef([]);
+            const motesRef = useRef([]);
+
+            const palettes = useMemo(() => ({
+                light: [
+                    { base: '#DFC1FF', glow: '#FAF5FF' }, { base: '#F9B9DE', glow: '#FFF5F7' }, 
+                    { base: '#A8E0FF', glow: '#F0F9FF' }, { base: '#D1C8FF', glow: '#F5F3FF' }, 
+                    { base: '#A9F5C5', glow: '#F0FDF4' }  
+                ],
+                dark: [
+                    { base: '#9400d3', glow: '#e0b0ff' }, { base: '#00ced1', glow: '#b2ffff' }, 
+                    { base: '#ff1493', glow: '#ffb6c1' }, { base: '#4169e1', glow: '#a2b9ff' }, 
+                    { base: '#00fa9a', glow: '#baffda' }  
+                ]
+            }), []);
+
+            useEffect(() => { isDarkRef.current = isDark; }, [isDark]);
+
+            const fetchFromGithub = async () => {
+                const { owner, repo, path, branch } = GITHUB_CONFIG;
+                if (owner === 'your-username') {
+                    setSyncStatus('Config Required');
+                    return;
+                }
+
+                setIsSyncing(true);
+                setSyncStatus('Scanning GitHub...');
+                try {
+                    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+                    const response = await fetch(apiUrl);
                     
-                    if (dist < 180 && dist > 5) {
-                        let strength = (180 - dist) * 0.0015;
-                        avoidAngle = Math.atan2(dy, dx) * strength;
+                    if (!response.ok) throw new Error("Folder not found");
+                    
+                    const contents = await response.json(); 
+                    const markdownFiles = contents.filter(item => 
+                        item.type === 'file' && (item.name.endsWith('.md') || item.name.endsWith('.txt'))
+                    );
+
+                    const fetchedNotes = [];
+
+                    for (const file of markdownFiles) {
+                        try {
+                            const fileRes = await fetch(file.download_url);
+                            if (fileRes.ok) {
+                                const text = await fileRes.text();
+                                fetchedNotes.push({
+                                    id: `github-${file.sha}`,
+                                    title: file.name.replace(/\.[^/.]+$/, "").replace(/-/g, ' '),
+                                    content: text
+                                });
+                            }
+                        } catch (e) { console.warn(`Failed to fetch ${file.name}`); }
                     }
 
-                    const targetAngle = t.baseAngle + swirl + wave + avoidAngle;
-                    let angleDiff = targetAngle - seg.currentAngle;
-                    seg.currentAngle += angleDiff * 0.05; 
-                    
-                    seg.x = lastX;
-                    seg.y = lastY;
-                    
-                    const nextX = seg.x + Math.cos(seg.currentAngle) * seg.len;
-                    const nextY = seg.y + Math.sin(seg.currentAngle) * seg.len;
-                    
-                    seg.targetX = nextX;
-                    seg.targetY = nextY;
-                    lastX = nextX;
-                    lastY = nextY;
-                });
-            });
-        }
-
-        draw() {
-            this.tentacles.forEach(t => {
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                t.segments.forEach(seg => { ctx.lineTo(seg.targetX, seg.targetY); });
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.shadowBlur = isDark ? 12 : 0;
-                ctx.shadowColor = this.color;
-                ctx.lineWidth = 7;
-                ctx.strokeStyle = this.color;
-                ctx.stroke();
-
-                const tip = t.segments[t.segments.length - 1];
-                ctx.beginPath();
-                ctx.arc(tip.targetX, tip.targetY, 2.2, 0, Math.PI * 2);
-                ctx.fillStyle = isDark ? this.glow : 'rgba(255,255,255,0.7)';
-                ctx.fill();
-            });
-        }
-    }
-
-    function drawCursor(time) {
-        if (!mouse.active) return;
-        ctx.save();
-        ctx.translate(mouse.x, mouse.y);
-        ctx.rotate(mouse.angle);
-
-        if (isDark) {
-            // MOON JELLY (Night)
-            const pulse = Math.sin(time * 0.003) * 2;
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = 'rgba(160, 251, 255, 0.8)';
-            
-            // Body
-            ctx.fillStyle = 'rgba(160, 251, 255, 0.2)';
-            ctx.beginPath();
-            ctx.arc(0, 0, 15 + pulse, Math.PI, 0);
-            ctx.fill();
-            
-            // Internal flower shape
-            ctx.strokeStyle = 'rgba(160, 251, 255, 0.5)';
-            ctx.lineWidth = 1;
-            for(let i=0; i<4; i++) {
-                ctx.rotate(Math.PI/2);
-                ctx.beginPath();
-                ctx.ellipse(5, 0, 4, 2, 0, 0, Math.PI*2);
-                ctx.stroke();
-            }
-
-            // Tentacles
-            ctx.beginPath();
-            for(let i=-10; i<=10; i+=5) {
-                ctx.moveTo(i, 0);
-                ctx.bezierCurveTo(i, 5, i + Math.sin(time*0.005 + i)*3, 10, i, 15 + pulse);
-            }
-            ctx.stroke();
-        } else {
-            // CLOWNFISH (Day)
-            // Body
-            ctx.fillStyle = '#ff8c00'; // Orange
-            ctx.beginPath();
-            ctx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // White stripes
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(-6, -7, 4, 14);
-            ctx.fillRect(4, -5, 3, 10);
-            
-            // Eye
-            ctx.fillStyle = '#000';
-            ctx.beginPath();
-            ctx.arc(10, -2, 1.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Tail
-            ctx.fillStyle = '#ff8c00';
-            ctx.beginPath();
-            ctx.moveTo(-14, 0);
-            ctx.lineTo(-22, -6 + Math.sin(time*0.01)*2);
-            ctx.lineTo(-22, 6 - Math.sin(time*0.01)*2);
-            ctx.fill();
-        }
-        ctx.restore();
-    }
-
-    function drawCaustics() {
-        ctx.save();
-        ctx.globalCompositeOperation = isDark ? 'screen' : 'overlay';
-        if (!isDark) {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-            ctx.lineWidth = 1;
-            const size = 120;
-            const t = time * 0.0003;
-            for (let i = -size; i < width + size; i += size) {
-                for (let j = -size; j < height + size; j += size) {
-                    ctx.beginPath();
-                    const ox = Math.sin(t + i * 0.01) * 25;
-                    const oy = Math.cos(t + j * 0.01) * 25;
-                    ctx.arc(i + ox, j + oy, size * 0.4, 0, Math.PI * 2);
-                    ctx.stroke();
+                    if (fetchedNotes.length > 0) {
+                        setNotes(fetchedNotes);
+                        setSyncStatus('Active');
+                        setIsSyncVisible(false);
+                        setPasswordValue("");
+                    } else {
+                        setSyncStatus('No Files Found');
+                    }
+                } catch (err) {
+                    setSyncStatus('Sync Error');
+                    console.error(err);
+                    setPasswordError(true);
+                    setTimeout(() => setPasswordError(false), 2000);
+                } finally {
+                    setIsSyncing(false);
                 }
-            }
-        } else {
-            for (let i = 0; i < 25; i++) {
-                const px = (Math.sin(time * 0.00008 + i * 500) * 0.5 + 0.5) * width;
-                const py = (Math.cos(time * 0.00015 + i * 800) * 0.5 + 0.5) * height;
-                ctx.beginPath();
-                ctx.arc(px, py, 1.2, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(160, 251, 255, 0.25)';
-                ctx.fill();
-            }
-        }
-        ctx.restore();
-    }
+            };
 
-    function init() {
-        resize();
-        checkTheme();
-        anemones = [];
-        const palette = isDark ? palettes.dark : palettes.light;
-        const count = 5 + Math.floor(width / 250);
-        for (let i = 0; i < count; i++) {
-            const x = Math.random() * width;
-            const y = Math.random() * height;
-            const color = palette[Math.floor(Math.random() * palette.length)];
-            anemones.push(new Anemone(x, y, color));
-        }
-    }
+            // Auto-fetch on mount
+            useEffect(() => { 
+                fetchFromGithub(); 
+            }, []);
 
-    function resize() {
-        width = canvas.width = window.innerWidth;
-        height = canvas.height = window.innerHeight;
-    }
+            const handlePasswordCheck = () => {
+                if (passwordValue === "forces") {
+                    fetchFromGithub();
+                } else {
+                    setPasswordError(true);
+                    setTimeout(() => setPasswordError(false), 2000);
+                }
+            };
 
-    function render(now) {
-        time = now;
-        const grad = ctx.createRadialGradient(width/2, height/2, 0, width/2, height/2, width);
-        if (isDark) {
-            grad.addColorStop(0, '#0a1a2f');
-            grad.addColorStop(1, '#020810');
-        } else {
-            grad.addColorStop(0, '#76d7ea');
-            grad.addColorStop(1, '#56b9cc');
-        }
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, width, height);
+            useEffect(() => {
+                const rCanvas = reefCanvasRef.current;
+                const cCanvas = cursorCanvasRef.current;
+                if (!rCanvas || !cCanvas) return;
+                const rCtx = rCanvas.getContext('2d');
+                const cCtx = cCanvas.getContext('2d');
+                let frameId;
 
-        drawCaustics();
-        anemones.forEach(a => { a.update(time); a.draw(); });
-        drawCursor(time);
+                const handleResize = () => {
+                    const dpr = window.devicePixelRatio || 1;
+                    [rCanvas, cCanvas].forEach(c => {
+                        c.width = window.innerWidth * dpr;
+                        c.height = window.innerHeight * dpr;
+                        c.style.width = `${window.innerWidth}px`;
+                        c.style.height = `${window.innerHeight}px`;
+                    });
+                };
+                window.addEventListener('resize', handleResize);
+                handleResize();
 
-        requestAnimationFrame(render);
-    }
+                motesRef.current = Array.from({ length: 40 }, () => ({
+                    x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
+                    s: 1.0 + Math.random() * 1.5, angle: Math.random() * Math.PI * 2,
+                    speed: 0.02 + Math.random() * 0.04, o: 0.15 + Math.random() * 0.2
+                }));
 
-    window.addEventListener('mousemove', e => {
-        // Calculate angle of movement for cursor orientation
-        const dx = e.clientX - mouse.x;
-        const dy = e.clientY - mouse.y;
-        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-            mouse.angle = Math.atan2(dy, dx);
-        }
-        mouse.x = e.clientX;
-        mouse.y = e.clientY;
-        mouse.active = true;
-    });
+                const render = (now) => {
+                    const dpr = window.devicePixelRatio || 1;
+                    const w = window.innerWidth;
+                    const h = window.innerHeight;
+                    const mouse = mouseRef.current;
+                    const dark = isDarkRef.current;
 
-    window.addEventListener('resize', () => { resize(); init(); });
-    init();
-    requestAnimationFrame(render);
-</script>
+                    rCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    cCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    cCtx.clearRect(0, 0, w, h);
+
+                    if (dark) {
+                        const grad = rCtx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w);
+                        grad.addColorStop(0, '#0a1a2f'); grad.addColorStop(1, '#020810');
+                        rCtx.fillStyle = grad;
+                    } else {
+                        const grad = rCtx.createLinearGradient(0, 0, w, h);
+                        grad.addColorStop(0, '#FDFBF0');
+                        grad.addColorStop(0.3, '#DEEFE9');
+                        grad.addColorStop(0.6, '#E0EBF7');
+                        grad.addColorStop(1, '#EDE5D5');
+                        rCtx.fillStyle = grad;
+                    }
+                    rCtx.fillRect(0, 0, w, h);
+
+                    rCtx.save();
+                    if (!dark) {
+                        rCtx.globalCompositeOperation = 'overlay';
+                        rCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; rCtx.lineWidth = 1;
+                        const t = now * 0.0003;
+                        for (let i = -140; i < w + 140; i += 140) {
+                            for (let j = -140; j < h + 140; j += 140) {
+                                rCtx.beginPath();
+                                const ox = Math.sin(t + i * 0.01) * 20; const oy = Math.cos(t + j * 0.01) * 20;
+                                rCtx.arc(i + ox, j + oy, 52, 0, Math.PI * 2); rCtx.stroke();
+                            }
+                        }
+                    } else {
+                        rCtx.fillStyle = 'rgba(160, 251, 255, 0.15)';
+                        motesRef.current.forEach(p => {
+                            p.x += Math.cos(p.angle) * p.speed; p.y += Math.sin(p.angle) * p.speed;
+                            if (p.x < -20) p.x = w + 20; if (p.x > w + 20) p.x = -20;
+                            if (p.y < -20) p.y = h + 20; if (p.y > h + 20) p.y = -20;
+                            rCtx.globalAlpha = p.o;
+                            rCtx.beginPath(); rCtx.arc(p.x, p.y, p.s, 0, Math.PI * 2); rCtx.fill();
+                        });
+                    }
+                    rCtx.restore();
+
+                    const existingIds = anemonesRef.current.map(a => a.id).join(',');
+                    const currentIds = notes.map(n => n.id).join(',');
+
+                    if (notes.length > 0 && existingIds !== currentIds) {
+                        const p = dark ? palettes.dark : palettes.light;
+                        anemonesRef.current = notes.map((n, i) => {
+                            const nx = (0.12 + Math.random() * 0.76) * w;
+                            const ny = (0.2 + Math.random() * 0.6) * h;
+                            return new AnemoneNode(n.id, nx, ny, p[i % p.length], i % p.length);
+                        });
+                    }
+
+                    let currentHover = null;
+                    anemonesRef.current.forEach(a => {
+                        const hvr = a.update(now, mouse);
+                        if (hvr) currentHover = a.id;
+                        const p = dark ? palettes.dark : palettes.light;
+                        const noteIndex = notes.findIndex(n => n.id === a.id);
+                        const colorData = p[noteIndex !== -1 ? (noteIndex % p.length) : (a.paletteIndex % p.length)];
+                        if (a.color !== colorData.base) { a.color = colorData.base; a.glow = colorData.glow; }
+
+                        a.draw(rCtx, dark, selectedNote?.id === a.id, now);
+
+                        const el = labelRefs.current[a.id];
+                        if (el) {
+                            const orbitR = 105 * a.scale;
+                            const orbitA = (now * 0.00003 + a.noiseSeed) % (Math.PI * 2);
+                            const fX = Math.sin(now * 0.00008 + a.noiseSeed) * 6;
+                            const fY = Math.cos(now * 0.00006 + a.noiseSeed * 1.2) * 5;
+                            let lx = a.x + Math.cos(orbitA) * orbitR + fX;
+                            let ly = a.y + Math.sin(orbitA) * orbitR + fY;
+                            const headerZone = { x: 380, y: 180 };
+                            if (lx < headerZone.x && ly < headerZone.y) { ly += 120; lx += 40; }
+                            const margin = 80;
+                            lx = Math.max(margin, Math.min(w - margin, lx)); ly = Math.max(margin, Math.min(h - margin, ly));
+                            const age = now - a.spawnTime;
+                            const fadeAlpha = Math.min(1, age / 250);
+                            el.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%) scale(${hvr ? 1.05 : 1})`;
+                            el.style.opacity = (hvr ? '1' : '0.6') * fadeAlpha;
+                            el.style.color = dark ? '#a0fbff' : '#4a5568';
+                            el.style.fontWeight = hvr ? 'bold' : 'normal';
+                        }
+                    });
+
+                    if (mouse.active && mouse.x >= 0) {
+                        cCtx.save();
+                        cCtx.translate(mouse.x, mouse.y);
+                        if (dark) {
+                            cCtx.rotate(mouse.angle + Math.PI / 2);
+                            const pulse = Math.sin(now * 0.003) * 2;
+                            cCtx.shadowBlur = 15; cCtx.shadowColor = 'rgba(160, 251, 255, 0.8)';
+                            cCtx.fillStyle = 'rgba(160, 251, 255, 0.2)';
+                            cCtx.beginPath(); cCtx.arc(0, 0, 15 + pulse, Math.PI, 0); cCtx.fill();
+                            cCtx.strokeStyle = 'rgba(160, 251, 255, 0.5)'; cCtx.lineWidth = 1;
+                            for(let i=0; i<4; i++) {
+                                cCtx.save(); cCtx.rotate((Math.PI/2) * i);
+                                cCtx.beginPath(); cCtx.ellipse(5, 0, 4, 2, 0, 0, Math.PI*2); cCtx.stroke();
+                                cCtx.restore();
+                            }
+                            cCtx.beginPath();
+                            for(let i=-10; i<=10; i+=5) {
+                                cCtx.moveTo(i, 0); cCtx.bezierCurveTo(i, 5, i + Math.sin(now*0.005 + i)*3, 10, i, 15 + pulse);
+                            }
+                            cCtx.stroke();
+                        } else {
+                            cCtx.rotate(mouse.angle);
+                            cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); cCtx.fill();
+                            cCtx.fillStyle = '#fff'; cCtx.fillRect(-6, -7, 4, 14); cCtx.fillRect(4, -5, 3, 10);
+                            cCtx.fillStyle = '#000'; cCtx.beginPath(); cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); cCtx.fill();
+                            cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); ctx.moveTo(-14, 0);
+                            cCtx.lineTo(-22, -6 + Math.sin(now * 0.01) * 2);
+                            cCtx.lineTo(-22, 6 - Math.sin(now * 0.01) * 2);
+                            cCtx.fill();
+                        }
+                        cCtx.restore();
+                    }
+
+                    if (currentHover !== hoveredNodeId) setHoveredNodeId(currentHover);
+                    frameId = requestAnimationFrame(render);
+                };
+
+                frameId = requestAnimationFrame(render);
+                return () => {
+                    cancelAnimationFrame(frameId);
+                    window.removeEventListener('resize', handleResize);
+                };
+            }, [notes, palettes, selectedNote]);
+
+            const handleMouseMove = (e) => {
+                const dx = e.clientX - mouseRef.current.x;
+                const dy = e.clientY - mouseRef.current.y;
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) mouseRef.current.angle = Math.atan2(dy, dx);
+                mouseRef.current.x = e.clientX;
+                mouseRef.current.y = e.clientY;
+                mouseRef.current.active = true;
+            };
+
+            return (
+                <div 
+                    className={`relative w-full h-screen transition-colors duration-[1500ms] ${isDark ? 'bg-[#020810]' : 'bg-[#F0EFE6]'} overflow-hidden select-none cursor-none`}
+                    onMouseMove={handleMouseMove}
+                    onClick={() => {
+                        if (hoveredNodeId) {
+                            setSelectedNote(notes.find(n => n.id === hoveredNodeId));
+                        } else {
+                            if (isListOpen) setIsListOpen(false);
+                            setSelectedNote(null);
+                            setIsSyncVisible(false);
+                        }
+                    }}
+                >
+                    <canvas ref={reefCanvasRef} className="absolute inset-0 block pointer-events-none z-0" />
+                    <canvas ref={cursorCanvasRef} className="absolute inset-0 block pointer-events-none z-[200]" />
+
+                    <div className="absolute bottom-8 left-8 z-[120] flex gap-3">
+                        <button onClick={(e) => { e.stopPropagation(); setIsDark(!isDark); }} className={`px-4 py-2 rounded-full border text-[10px] uppercase tracking-widest transition-all duration-500 ${isDark ? 'bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10' : 'bg-black/5 border-black/10 text-black/40 hover:text-black hover:bg-black/10'} font-sans`}>
+                            {isDark ? '☀ Sunlit' : '☾ Abyss'}
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsSyncVisible(false); }} className={`px-4 py-2 rounded-full border text-[10px] uppercase tracking-widest transition-all duration-500 ${isDark ? 'bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10' : 'bg-black/5 border-black/10 text-black/40 hover:text-black hover:bg-black/10'} font-sans`}>
+                            ☰ Reef Index
+                        </button>
+                    </div>
+
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-24 left-8 z-[130] w-[260px] max-h-[400px] overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} ${isDark ? 'bg-slate-900/90 border-slate-700 shadow-2xl' : 'bg-white/95 border-slate-200 shadow-xl'} border rounded-sm flex flex-col p-4`}>
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex flex-col">
+                                <div className="text-[10px] uppercase tracking-[0.3em] opacity-40 font-sans leading-tight">Index</div>
+                                <div className="text-[7px] uppercase tracking-[0.1em] opacity-25 font-sans mt-1">Status: {syncStatus}</div>
+                            </div>
+                            {!isSyncVisible ? (
+                                <button onClick={() => setIsSyncVisible(true)} className="text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">GitHub Sync</button>
+                            ) : (
+                                <button onClick={() => setIsSyncVisible(false)} className="text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 font-sans">Cancel</button>
+                            )}
+                        </div>
+
+                        {isSyncVisible && (
+                            <div className={`mb-6 p-3 rounded-sm border ${isDark ? 'border-white/5 bg-white/5' : 'border-black/5 bg-black/5'}`}>
+                                <div className="text-[9px] uppercase tracking-widest mb-2 opacity-50 font-sans">Access Key</div>
+                                <div className="flex gap-2">
+                                    <input type="password" value={passwordValue} onChange={(e) => setPasswordValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handlePasswordCheck()} placeholder="••••" className={`flex-1 bg-transparent border-b text-[12px] p-1 font-sans focus:outline-none transition-colors ${passwordError ? 'border-red-500 text-red-500' : (isDark ? 'border-white/20 text-white' : 'border-black/20 text-black')}`} />
+                                    <button onClick={handlePasswordCheck} disabled={isSyncing} className={`px-2 py-1 rounded-sm text-[10px] uppercase font-sans transition-all ${isDark ? 'bg-white/10 hover:bg-white text-white hover:text-black' : 'bg-black/10 hover:bg-black text-black hover:text-white'}`}>
+                                        {isSyncing ? '...' : 'Sync'}
+                                    </button>
+                                </div>
+                                <p className="text-[8px] mt-2 opacity-40 leading-tight">Scans GitHub repository: {GITHUB_CONFIG.repo}</p>
+                            </div>
+                        )}
+
+                        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-1">
+                            {notes.length === 0 && !isSyncing && <div className="text-[11px] opacity-30 italic p-2">Sea is empty. Check GitHub Config.</div>}
+                            {notes.map(note => (
+                                <button key={note.id} onClick={() => { setSelectedNote(note); setIsListOpen(false); }} className={`text-left p-2 rounded-sm text-[13px] lowercase tracking-wider transition-all duration-300 font-dyslexic ${isDark ? 'text-slate-300 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-black/5 hover:text-slate-900'}`}>
+                                    {note.title}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {!selectedNote && !isListOpen && notes.map(n => (
+                        <div key={n.id} ref={el => labelRefs.current[n.id] = el} className={`absolute left-0 top-0 text-[14px] leading-tight lowercase tracking-[0.05em] font-dyslexic pointer-events-none transition-opacity duration-500 will-change-transform z-10`} style={{ opacity: 0 }}>
+                            {n.title?.toLowerCase()}
+                        </div>
+                    ))}
+
+                    <div className="absolute top-12 left-12 pointer-events-none z-20">
+                        <h1 className={`text-5xl tracking-[0.4em] font-light italic ${isDark ? 'text-[#a0fbff]' : 'text-[#2d3748]'} uppercase leading-none font-serif transition-colors duration-1000`}>Reef</h1>
+                        <p className={`text-[9px] tracking-[0.4em] mt-4 opacity-40 font-sans uppercase ${isDark ? 'text-[#a0fbff]' : 'text-[#2d3748]'} transition-colors duration-1000`}>Looking down into the drift</p>
+                    </div>
+
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} ${isDark ? 'bg-slate-900/90 border-slate-700 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.8)]' : 'bg-white/95 border-slate-200 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.15)]'} border rounded-sm flex flex-col overflow-hidden`} >
+                        <div className="flex-1 p-8 flex flex-col relative">
+                            <div className="absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-multiply bg-[url('https://www.transparenttextures.com/patterns/felt.png')]" />
+                            <button onClick={() => setSelectedNote(null)} className={`self-end mb-4 text-[10px] uppercase tracking-widest transition-all px-2 py-1 rounded-sm ${isDark ? 'text-[#a0fbff]/50 hover:text-[#a0fbff]' : 'text-slate-400 hover:text-slate-900'} font-sans`}>Close ✕</button>
+                            
+                            <div className="mb-4">
+                                <h2 className={`text-2xl font-serif font-normal leading-tight ${isDark ? 'text-[#a0fbff]' : 'text-slate-900'}`}>{selectedNote?.title}</h2>
+                                <div className={`h-[1px] w-full mt-2 ${isDark ? 'bg-[#a0fbff]/10' : 'bg-slate-100'}`} />
+                            </div>
+                            
+                            <div className={`flex-1 overflow-y-auto pr-2 custom-scrollbar ${isDark ? 'dark-scrollbar text-[#a0fbff]/80' : 'text-slate-700'} font-serif`}>
+                                {selectedNote && <div className="prose prose-sm leading-relaxed animate-in fade-in slide-in-from-bottom-2 duration-500" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
+                            </div>
+                            
+                            <div className={`mt-8 pt-6 border-t ${isDark ? 'border-[#a0fbff]/10 text-[#a0fbff]/30' : 'border-slate-100 text-slate-300'} text-[8px] uppercase tracking-[0.3em] font-sans`}>Origin: GitHub Content API</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
