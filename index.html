@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anemone Reef - Top View</title>
+    <style>
+        :root {
+            /* Light Mode (Sunlit Reef) */
+            --bg-light: #76d7ea;
+            --text-light: #005f6b;
+            
+            /* Dark Mode (Bioluminescent Abyss) */
+            --bg-dark: #020810;
+            --text-dark: #a0fbff;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-light);
+            transition: background 2s ease;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            cursor: none;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #ui {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            font-family: 'Palatino', 'Georgia', serif;
+            letter-spacing: 0.2em;
+            pointer-events: none;
+            opacity: 0.6;
+            z-index: 10;
+        }
+
+        .hint {
+            font-size: 0.7rem;
+            font-style: italic;
+            text-transform: uppercase;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="ui">
+        <h1>REEF</h1>
+        <div class="hint">looking down into the drift</div>
+    </div>
+    <canvas id="artCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('artCanvas');
+    const ctx = canvas.getContext('2d');
+    const ui = document.getElementById('ui');
+
+    let width, height;
+    let anemones = [];
+    let mouse = { x: -1000, y: -1000, active: false, angle: 0 };
+    let time = 0;
+    let isDark = false;
+
+    const palettes = {
+        light: [
+            { base: '#ffb6c1', glow: '#fff0f5' }, // Morganite
+            { base: '#87ceeb', glow: '#f0ffff' }, // Aquamarine
+            { base: '#e6e6fa', glow: '#ffffff' }, // Lavender
+            { base: '#f0e68c', glow: '#fffde7' }, // Heliodor
+            { base: '#98fb98', glow: '#f1fff1' }  // Peridot
+        ],
+        dark: [
+            { base: '#9400d3', glow: '#e0b0ff' }, // Amethyst
+            { base: '#00ced1', glow: '#b2ffff' }, // Phosphophyllite
+            { base: '#ff1493', glow: '#ffb6c1' }, // Cinnabar
+            { base: '#4169e1', glow: '#a2b9ff' }, // Sapphire
+            { base: '#00fa9a', glow: '#baffda' }  // Jade
+        ]
+    };
+
+    function checkTheme() {
+        const hour = new Date().getHours();
+        const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const isNight = hour >= 19 || hour <= 6;
+        isDark = systemPrefersDark || isNight;
+
+        if (isDark) {
+            document.body.style.background = 'var(--bg-dark)';
+            ui.style.color = 'var(--text-dark)';
+        } else {
+            document.body.style.background = 'var(--bg-light)';
+            ui.style.color = 'var(--text-light)';
+        }
+    }
+
+    class TentacleSegment {
+        constructor(x, y, len, angle) {
+            this.x = x;
+            this.y = y;
+            this.len = len;
+            this.angle = angle;
+            this.currentAngle = angle;
+        }
+    }
+
+    class Anemone {
+        constructor(x, y, colorData) {
+            this.x = x;
+            this.y = y;
+            this.color = colorData.base;
+            this.glow = colorData.glow;
+            this.tentacles = [];
+            const count = 25 + Math.floor(Math.random() * 15);
+            
+            for (let i = 0; i < count; i++) {
+                const angle = (Math.PI * 2 / count) * i;
+                const segments = [];
+                const segCount = 6 + Math.floor(Math.random() * 4);
+                const segLen = 8 + Math.random() * 6;
+                
+                for (let j = 0; j < segCount; j++) {
+                    segments.push(new TentacleSegment(x, y, segLen, angle));
+                }
+                this.tentacles.push({ segments, baseAngle: angle });
+            }
+        }
+
+        update(time) {
+            this.tentacles.forEach(t => {
+                let lastX = this.x;
+                let lastY = this.y;
+
+                t.segments.forEach((seg, i) => {
+                    const swirl = Math.sin(time * 0.0003 + this.x * 0.01) * 0.15;
+                    const wave = Math.sin(time * 0.0005 + i * 0.4 + t.baseAngle) * 0.1;
+                    
+                    let dx = seg.x - mouse.x;
+                    let dy = seg.y - mouse.y;
+                    let dist = Math.sqrt(dx*dx + dy*dy);
+                    let avoidAngle = 0;
+                    
+                    if (dist < 180 && dist > 5) {
+                        let strength = (180 - dist) * 0.0015;
+                        avoidAngle = Math.atan2(dy, dx) * strength;
+                    }
+
+                    const targetAngle = t.baseAngle + swirl + wave + avoidAngle;
+                    let angleDiff = targetAngle - seg.currentAngle;
+                    seg.currentAngle += angleDiff * 0.05; 
+                    
+                    seg.x = lastX;
+                    seg.y = lastY;
+                    
+                    const nextX = seg.x + Math.cos(seg.currentAngle) * seg.len;
+                    const nextY = seg.y + Math.sin(seg.currentAngle) * seg.len;
+                    
+                    seg.targetX = nextX;
+                    seg.targetY = nextY;
+                    lastX = nextX;
+                    lastY = nextY;
+                });
+            });
+        }
+
+        draw() {
+            this.tentacles.forEach(t => {
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                t.segments.forEach(seg => { ctx.lineTo(seg.targetX, seg.targetY); });
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.shadowBlur = isDark ? 12 : 0;
+                ctx.shadowColor = this.color;
+                ctx.lineWidth = 7;
+                ctx.strokeStyle = this.color;
+                ctx.stroke();
+
+                const tip = t.segments[t.segments.length - 1];
+                ctx.beginPath();
+                ctx.arc(tip.targetX, tip.targetY, 2.2, 0, Math.PI * 2);
+                ctx.fillStyle = isDark ? this.glow : 'rgba(255,255,255,0.7)';
+                ctx.fill();
+            });
+        }
+    }
+
+    function drawCursor(time) {
+        if (!mouse.active) return;
+        ctx.save();
+        ctx.translate(mouse.x, mouse.y);
+        ctx.rotate(mouse.angle);
+
+        if (isDark) {
+            // MOON JELLY (Night)
+            const pulse = Math.sin(time * 0.003) * 2;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(160, 251, 255, 0.8)';
+            
+            // Body
+            ctx.fillStyle = 'rgba(160, 251, 255, 0.2)';
+            ctx.beginPath();
+            ctx.arc(0, 0, 15 + pulse, Math.PI, 0);
+            ctx.fill();
+            
+            // Internal flower shape
+            ctx.strokeStyle = 'rgba(160, 251, 255, 0.5)';
+            ctx.lineWidth = 1;
+            for(let i=0; i<4; i++) {
+                ctx.rotate(Math.PI/2);
+                ctx.beginPath();
+                ctx.ellipse(5, 0, 4, 2, 0, 0, Math.PI*2);
+                ctx.stroke();
+            }
+
+            // Tentacles
+            ctx.beginPath();
+            for(let i=-10; i<=10; i+=5) {
+                ctx.moveTo(i, 0);
+                ctx.bezierCurveTo(i, 5, i + Math.sin(time*0.005 + i)*3, 10, i, 15 + pulse);
+            }
+            ctx.stroke();
+        } else {
+            // CLOWNFISH (Day)
+            // Body
+            ctx.fillStyle = '#ff8c00'; // Orange
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // White stripes
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(-6, -7, 4, 14);
+            ctx.fillRect(4, -5, 3, 10);
+            
+            // Eye
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(10, -2, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Tail
+            ctx.fillStyle = '#ff8c00';
+            ctx.beginPath();
+            ctx.moveTo(-14, 0);
+            ctx.lineTo(-22, -6 + Math.sin(time*0.01)*2);
+            ctx.lineTo(-22, 6 - Math.sin(time*0.01)*2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    function drawCaustics() {
+        ctx.save();
+        ctx.globalCompositeOperation = isDark ? 'screen' : 'overlay';
+        if (!isDark) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 1;
+            const size = 120;
+            const t = time * 0.0003;
+            for (let i = -size; i < width + size; i += size) {
+                for (let j = -size; j < height + size; j += size) {
+                    ctx.beginPath();
+                    const ox = Math.sin(t + i * 0.01) * 25;
+                    const oy = Math.cos(t + j * 0.01) * 25;
+                    ctx.arc(i + ox, j + oy, size * 0.4, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+        } else {
+            for (let i = 0; i < 25; i++) {
+                const px = (Math.sin(time * 0.00008 + i * 500) * 0.5 + 0.5) * width;
+                const py = (Math.cos(time * 0.00015 + i * 800) * 0.5 + 0.5) * height;
+                ctx.beginPath();
+                ctx.arc(px, py, 1.2, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(160, 251, 255, 0.25)';
+                ctx.fill();
+            }
+        }
+        ctx.restore();
+    }
+
+    function init() {
+        resize();
+        checkTheme();
+        anemones = [];
+        const palette = isDark ? palettes.dark : palettes.light;
+        const count = 5 + Math.floor(width / 250);
+        for (let i = 0; i < count; i++) {
+            const x = Math.random() * width;
+            const y = Math.random() * height;
+            const color = palette[Math.floor(Math.random() * palette.length)];
+            anemones.push(new Anemone(x, y, color));
+        }
+    }
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+
+    function render(now) {
+        time = now;
+        const grad = ctx.createRadialGradient(width/2, height/2, 0, width/2, height/2, width);
+        if (isDark) {
+            grad.addColorStop(0, '#0a1a2f');
+            grad.addColorStop(1, '#020810');
+        } else {
+            grad.addColorStop(0, '#76d7ea');
+            grad.addColorStop(1, '#56b9cc');
+        }
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+
+        drawCaustics();
+        anemones.forEach(a => { a.update(time); a.draw(); });
+        drawCursor(time);
+
+        requestAnimationFrame(render);
+    }
+
+    window.addEventListener('mousemove', e => {
+        // Calculate angle of movement for cursor orientation
+        const dx = e.clientX - mouse.x;
+        const dy = e.clientY - mouse.y;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+            mouse.angle = Math.atan2(dy, dx);
+        }
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+        mouse.active = true;
+    });
+
+    window.addEventListener('resize', () => { resize(); init(); });
+    init();
+    requestAnimationFrame(render);
+</script>
+</body>
+</html>
