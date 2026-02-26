@@ -90,10 +90,6 @@
             }
         };
 
-        /**
-         * Enhanced Markdown Renderer with Editorial Hierarchy.
-         * Body text is kept small, while headings are scaled for contrast.
-         */
         const renderMarkdown = (text) => {
             if (!text) return "";
             const rawBase = `https://raw.githubusercontent.com/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/${REPO_CONFIG.branch}/`;
@@ -120,7 +116,7 @@
                 })
                 .replace(/\[(.*?)\]\((.*?)\)/gim, (match, label, url) => {
                     const fullUrl = resolveUrl(url);
-                    return `<a href="${fullUrl}" target="_blank" rel="noopener noreferrer" class="text-teal-700 underline underline-offset-4 hover:text-teal-900 transition-colors">${label}</a>`;
+                    return `<a href="${fullUrl}" target="_blank" rel="noopener noreferrer" class="text-teal-700 underline underline-offset-4 hover:text-teal-900">${label}</a>`;
                 })
                 .replace(/^### (.*$)/gim, '<h3 class="text-lg font-serif mt-6 mb-2 text-slate-700 font-medium">$1</h3>')
                 .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-8 mb-3 text-slate-800 font-normal border-b border-slate-100 pb-1">$2</h2>')
@@ -293,7 +289,7 @@
                         nx = (0.1 + Math.random() * 0.8) * w;
                         ny = (0.2 + Math.random() * 0.6) * h;
                         spotFound = true;
-                        if (nx < 400 && ny < 240) spotFound = false; // Avoid title area
+                        if (nx < 400 && ny < 240) spotFound = false; // Avoid REEF title
                         if (spotFound) {
                             for (let other of newAnemones) { 
                                 const minDist = (clearanceFactor * relativeScale) + (clearanceFactor * other.scale);
@@ -380,7 +376,7 @@
                 if (!newNoteTitle || !newNoteContent || !trimmedToken) { setSyncStatus('token required'); return; }
                 setIsSyncing(true); setSyncStatus('attaching...');
                 const fileName = newNoteTitle.toLowerCase().replace(/\s+/g, '-') + '.md';
-                const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}/${fileName}`;
+                const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${REPO_CONFIG.path}/${fileName}`;
                 try {
                     const checkRes = await fetch(`${apiUrl}?ref=${REPO_CONFIG.branch}`, { headers: { 'Authorization': `Bearer ${trimmedToken}` } });
                     if (checkRes.status === 401) throw new Error("only users with private key may contribute");
@@ -559,7 +555,6 @@
                         });
                         if (closestId) { openNote(notes.find(n => n.id === closestId)); setIsAddVisible(false); } 
                         else { 
-                            // Clicked away: Close drawer and index
                             setIsListOpen(false); setIsAddVisible(false); closeNote(); 
                         }
                     }}
@@ -596,7 +591,6 @@
 
                         {isAddVisible && (
                             <div className="mb-6 p-4 rounded-sm border border-teal-900/5 bg-teal-900/5 animate-in fade-in zoom-in-95 duration-200">
-                                <div className="text-[9px] tracking-widest mb-3 opacity-50 font-sans">new anemone</div>
                                 <input type="text" placeholder="title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[12px] mb-3 p-1 font-sans focus:outline-none" />
                                 <textarea placeholder="write here..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-teal-900/10 text-teal-900 rounded-sm text-[11px] mb-3 p-2 font-serif focus:outline-none bg-white/40" />
                                 <input type="password" placeholder="ghp_..." value={accessToken} onChange={(e) => setAccessToken(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[11px] mb-2 p-1 font-sans focus:outline-none" />
@@ -606,7 +600,7 @@
 
                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-1">
                             {sortedNotes.map(note => (
-                                <button key={note.id} onClick={() => openNote(note)} className={`text-left p-2 rounded-sm text-[13px] transition-all font-dyslexic ${selectedNote?.id === note.id ? 'bg-teal-900/5 text-teal-900 font-bold' : 'text-teal-900/60 hover:bg-teal-900/5'}`}>
+                                <button key={note.id} onClick={() => openNote(note)} className="text-left p-2 rounded-sm text-[13px] transition-all font-dyslexic break-words hyphen-auto leading-tight text-teal-900/60 hover:bg-teal-900/5">
                                     {note.title}
                                 </button>
                             ))}
@@ -622,7 +616,7 @@
                         <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-0.5 sm:mt-1 opacity-40 font-sans text-slate-800 uppercase">works by anna emerson</p>
                     </div>
 
-                    {/* INDIVIDUAL READING PANEL */}
+                    {/* READING PANEL */}
                     <div 
                         onClick={(e) => e.stopPropagation()} 
                         className={`absolute z-[150] 
@@ -647,7 +641,7 @@
                                     <h2 className="text-xl sm:text-2xl font-serif text-slate-950 leading-tight transition-all duration-500">{selectedNote?.title}</h2>
                                     <div className="h-[1px] w-8 mx-auto mt-6 bg-slate-900/10" />
                                 </div>
-                                <div className={`text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none transition-all duration-500`}>
+                                <div className="text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none hyphen-auto break-words transition-all duration-500">
                                     {selectedNote && <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
                                 </div>
                             </div>
@@ -663,7 +657,7 @@
                                     <div key={note.id} className="relative">
                                         <div className="mb-6 opacity-40 text-[9px] tracking-widest uppercase font-sans border-b border-slate-100 pb-2 text-center">{note.date || "..."}</div>
                                         <h2 className="text-xl sm:text-2xl font-serif text-slate-950 mb-6 text-center leading-tight">{note.title}</h2>
-                                        <div className="text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none" dangerouslySetInnerHTML={{ __html: renderMarkdown(note.content) }} />
+                                        <div className="text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none hyphen-auto break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(note.content) }} />
                                         <div className="mt-16 flex justify-center opacity-5"><div className="h-[1px] w-32 bg-slate-900" /></div>
                                     </div>
                                 ))}
