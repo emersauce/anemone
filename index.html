@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Anemone Sea</title>
+    <title>anemone</title>
     <!-- CDNs for React, ReactDOM, Babel, and Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -31,19 +31,59 @@
             backface-visibility: hidden;
             transform: translateZ(0);
         }
+        .hyphen-auto {
+            hyphens: auto;
+            -webkit-hyphens: auto;
+            -ms-hyphens: auto;
+        }
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.15; }
+        }
+        .animate-pulse-soft {
+            animation: pulse-soft 3s ease-in-out infinite;
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useMemo } = React;
+        const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-        const GITHUB_CONFIG = {
+        // --- REPOSITORY CONFIGURATION ---
+        const REPO_CONFIG = {
             owner: 'emersauce',
             repo: 'anemone',
             path: 'drifts',
             branch: 'network'
+        };
+
+        // Utility for exponential backoff and rate-limit detection
+        const fetchWithRetry = async (url, options = {}, retries = 3, backoff = 1000) => {
+            try {
+                const response = await fetch(url, options);
+                
+                // Detection of rate limits
+                if (response.status === 403) {
+                    const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
+                    if (rateLimitRemaining === '0') {
+                        throw new Error('rate limited');
+                    }
+                }
+                
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.message || `HTTP error ${response.status}`);
+                }
+                return response;
+            } catch (error) {
+                if (retries > 0 && error.message !== 'rate limited') {
+                    await new Promise(resolve => setTimeout(resolve, backoff));
+                    return fetchWithRetry(url, options, retries - 1, backoff * 2);
+                }
+                throw error;
+            }
         };
 
         const renderMarkdown = (text) => {
@@ -79,12 +119,14 @@
                 this.tentacles = [];
                 this.spawnTime = performance.now();
                 
-                const count = Math.floor((20 + Math.random() * 10) * Math.sqrt(this.scale));
+                const count = Math.floor((22 + Math.random() * 8) * Math.sqrt(this.scale));
                 for (let i = 0; i < count; i++) {
                     const angle = (Math.PI * 2 / count) * i;
                     const segments = [];
-                    const segCount = 5 + Math.floor(Math.random() * 4);
-                    const segLen = (8 + Math.random() * 6) * this.scale;
+                    const lengthVariation = 0.8 + Math.random() * 0.4;
+                    const segCount = Math.max(3, Math.floor(6 * this.scale * lengthVariation));
+                    const segLen = (6 + Math.random() * 4) * this.scale;
+                    
                     for (let j = 0; j < segCount; j++) {
                         segments.push(new TentacleSegment(x, y, segLen, angle));
                     }
@@ -97,15 +139,12 @@
                 const driftY = Math.cos(time * 0.00006 + this.baseY) * 3;
                 this.x = this.baseX + driftX;
                 this.y = this.baseY + driftY;
-
-                const dx = this.x - mouse.x;
-                const dy = this.y - mouse.y;
+                const dx = this.x - mouse.x, dy = this.y - mouse.y;
                 const distToMouse = Math.sqrt(dx*dx + dy*dy);
                 const isNear = distToMouse < 250;
 
                 this.tentacles.forEach(t => {
-                    let lastX = this.x;
-                    let lastY = this.y;
+                    let lastX = this.x, lastY = this.y;
                     t.segments.forEach((seg, i) => {
                         const swirl = Math.sin(time * 0.00015 + this.x * 0.01) * 0.06;
                         const wave = Math.sin(time * 0.0003 + i * 0.3 + t.baseAngle) * 0.04;
@@ -140,22 +179,36 @@
                 ctx.fillStyle = coreGrad;
                 ctx.globalAlpha = (isSelected ? 0.35 : 0.15) * fadeInAlpha;
                 ctx.beginPath(); ctx.arc(this.x, this.y, coreSize, 0, Math.PI * 2); ctx.fill();
-                ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-                ctx.lineWidth = 6 * this.scale;
+                
+                ctx.lineCap = 'round'; 
+                ctx.lineJoin = 'round';
+                const mainWidth = (4 + 5 * this.scale);
+                ctx.lineWidth = mainWidth;
                 ctx.strokeStyle = this.color;
                 ctx.globalAlpha = (isSelected ? 1.0 : 0.6) * fadeInAlpha;
+                
                 ctx.beginPath();
                 this.tentacles.forEach(t => {
                     ctx.moveTo(this.x, this.y);
                     t.segments.forEach(seg => ctx.lineTo(seg.targetX, seg.targetY));
                 });
                 ctx.stroke();
+
+                ctx.lineWidth = mainWidth * 0.3;
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                ctx.beginPath();
+                this.tentacles.forEach(t => {
+                    ctx.moveTo(this.x, this.y);
+                    t.segments.forEach(seg => ctx.lineTo(seg.targetX, seg.targetY));
+                });
+                ctx.stroke();
+
                 ctx.fillStyle = 'rgba(255,255,255,0.7)';
                 ctx.beginPath();
                 this.tentacles.forEach(t => {
                     const tip = t.segments[t.segments.length - 1];
                     ctx.moveTo(tip.targetX, tip.targetY);
-                    ctx.arc(tip.targetX, tip.targetY, 2 * this.scale, 0, Math.PI * 2);
+                    ctx.arc(tip.targetX, tip.targetY, 1.8 * this.scale, 0, Math.PI * 2);
                 });
                 ctx.fill();
                 ctx.restore();
@@ -176,8 +229,8 @@
             
             const [newNoteTitle, setNewNoteTitle] = useState("");
             const [newNoteContent, setNewNoteContent] = useState("");
-            const [githubToken, setGithubToken] = useState("");
-            const [syncStatus, setSyncStatus] = useState('Standby');
+            const [accessToken, setAccessToken] = useState("");
+            const [syncStatus, setSyncStatus] = useState('standby');
             const [isSyncing, setIsSyncing] = useState(false);
 
             const mouseRef = useRef({ 
@@ -192,7 +245,7 @@
             const lightPalette = useMemo(() => [
                 { base: '#DFC1FF' }, { base: '#F9B9DE' }, 
                 { base: '#A8E0FF' }, { base: '#D1C8FF' }, 
-                { base: '#A9F5C5' }  
+                { base: '#D4FF00' }  
             ], []);
 
             const sortedNotes = useMemo(() => {
@@ -212,67 +265,103 @@
                 return () => window.removeEventListener('keydown', handleKeyDown);
             }, []);
 
-            const fetchFromGithub = async () => {
-                const { owner, repo, path, branch } = GITHUB_CONFIG;
-                const trimmedToken = githubToken.trim();
+            // Optimization: Fetch metadata on demand only when an anemone is selected
+            const fetchDateForAnemone = async (path) => {
+                const { owner, repo, branch } = REPO_CONFIG;
+                const trimmedToken = accessToken.trim();
+                const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
+                
+                try {
+                    const commitUrl = `https://api.github.com/repos/${owner}/${repo}/commits?path=${path}&sha=${branch}&per_page=1`;
+                    const commitRes = await fetchWithRetry(commitUrl, { headers });
+                    if (commitRes.ok) {
+                        const commitData = await commitRes.json();
+                        if (commitData.length > 0) return commitData[0].commit.committer.date.split('T')[0];
+                    }
+                } catch (e) { console.warn("date fetch failed", e); }
+                return null;
+            };
+
+            const fetchFromReef = useCallback(async () => {
+                const { owner, repo, path, branch } = REPO_CONFIG;
+                const trimmedToken = accessToken.trim();
                 const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
 
                 setIsSyncing(true);
-                setSyncStatus('Scanning Commits...');
+                setSyncStatus('syncing reef...');
                 try {
                     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-                    const response = await fetch(apiUrl, { headers });
-                    if (!response.ok) throw new Error("Connection Failed");
+                    const response = await fetchWithRetry(apiUrl, { headers });
                     const contents = await response.json(); 
+                    
                     const markdownFiles = contents.filter(item => 
-                        item.type === 'file' && (item.name.endsWith('.md') || item.name.endsWith('.txt'))
+                        item.type === 'file' && 
+                        /\.(md|txt|MD|TXT)$/.test(item.name)
                     );
                     
+                    if (markdownFiles.length === 0) {
+                        setNotes([]);
+                        setSyncStatus('folder empty');
+                        setIsSyncing(false);
+                        return;
+                    }
+
                     const fetchedNotes = [];
+                    // Process contents. Raw file fetching usually doesn't count against API rate limits
                     for (const file of markdownFiles) {
                         try {
                             const fileRes = await fetch(file.download_url);
                             const text = await fileRes.text();
-                            const commitUrl = `https://api.github.com/repos/${owner}/${repo}/commits?path=${file.path}&sha=${branch}&per_page=1`;
-                            const commitRes = await fetch(commitUrl, { headers });
-                            let commitDate = null;
-                            if (commitRes.ok) {
-                                const commitData = await commitRes.json();
-                                if (commitData.length > 0) {
-                                    commitDate = commitData[0].commit.committer.date.split('T')[0];
-                                }
-                            }
+
                             fetchedNotes.push({
-                                id: `github-${file.sha}`,
-                                title: file.name.replace(/\.[^/.]+$/, "").replace(/-/g, ' '),
-                                date: commitDate,
+                                id: `anemone-${file.sha}`,
+                                path: file.path, // Store path for lazy date loading
+                                title: file.name.replace(/\.[^/.]+$/, "").replace(/-/g, ' ').toLowerCase(),
+                                date: null, // Defer this
                                 content: text,
                                 charCount: text.length 
                             });
-                        } catch (e) { console.error("Error fetching file metadata", e); }
+                        } catch (e) { 
+                            console.warn(`skipping file: ${file.name}`, e);
+                        }
                     }
                     setNotes(fetchedNotes);
-                    setSyncStatus(fetchedNotes.length > 0 ? 'Active' : 'Empty Reef');
+                    setSyncStatus('active');
                 } catch (err) {
-                    setSyncStatus('Rate Limited / Offline');
+                    if (err.message === 'rate limited') {
+                        setSyncStatus('rate limited');
+                        if (notes.length === 0) setIsAddVisible(true);
+                    } else {
+                        setSyncStatus('sync error');
+                    }
+                    console.error("sync failed:", err);
                 } finally { setIsSyncing(false); }
+            }, [accessToken, notes.length]);
+
+            const handleAnemoneSelection = async (note) => {
+                setSelectedNote(note);
+                if (note && !note.date) {
+                    const date = await fetchDateForAnemone(note.path);
+                    if (date) {
+                        setNotes(prev => prev.map(n => n.id === note.id ? {...n, date} : n));
+                        setSelectedNote(prev => prev && prev.id === note.id ? {...prev, date} : prev);
+                    }
+                }
             };
 
-            const plantNewDrift = async () => {
-                const trimmedToken = githubToken.trim();
+            const attachToPermanent = async () => {
+                const trimmedToken = accessToken.trim();
                 if (!newNoteTitle || !newNoteContent || !trimmedToken) {
-                    setSyncStatus('Missing Fields'); return;
+                    setSyncStatus('token required'); return;
                 }
                 setIsSyncing(true);
-                setSyncStatus('Planting...');
-                const { owner, repo, path, branch } = GITHUB_CONFIG;
+                setSyncStatus('attaching...');
+                const { owner, repo, path, branch } = REPO_CONFIG;
                 const fileName = newNoteTitle.toLowerCase().replace(/\s+/g, '-') + '.md';
                 const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}/${fileName}`;
 
                 try {
-                    const checkRes = await fetch(`${apiUrl}?ref=${branch}`, {
-                        headers: { 'Authorization': `Bearer ${trimmedToken}` }
-                    });
+                    const checkRes = await fetch(`${apiUrl}?ref=${branch}`, { headers: { 'Authorization': `Bearer ${trimmedToken}` } });
                     let sha = null;
                     if (checkRes.ok) {
                         const existingFile = await checkRes.json();
@@ -282,16 +371,21 @@
                     const response = await fetch(apiUrl, {
                         method: 'PUT',
                         headers: { 'Authorization': `Bearer ${trimmedToken}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: `Drift: ${newNoteTitle}`, content: contentBase64, branch: branch, sha: sha })
+                        body: JSON.stringify({ message: `anemone: ${newNoteTitle}`, content: contentBase64, branch: branch, sha: sha })
                     });
-                    if (!response.ok) throw new Error("Push Failed");
-                    setSyncStatus('Planted');
+                    if (!response.ok) {
+                        const errData = await response.json();
+                        throw new Error(errData.message || "attach failed");
+                    }
+                    setSyncStatus('attached');
                     setNewNoteTitle(""); setNewNoteContent(""); setIsAddVisible(false);
-                    setTimeout(fetchFromGithub, 1500);
-                } catch (err) { setSyncStatus(err.message.substring(0, 20)); } finally { setIsSyncing(false); }
+                    setTimeout(fetchFromReef, 1500);
+                } catch (err) { setSyncStatus(err.message.substring(0, 20).toLowerCase()); } finally { setIsSyncing(false); }
             };
 
-            useEffect(() => { fetchFromGithub(); }, []);
+            useEffect(() => { 
+                fetchFromReef(); 
+            }, []);
 
             useEffect(() => {
                 const rCanvas = reefCanvasRef.current;
@@ -322,12 +416,14 @@
                     cCtx.clearRect(0, 0, w, h);
                     rCtx.fillStyle = '#FDFBF0';
                     rCtx.fillRect(0, 0, w, h);
+                    
                     const grad = rCtx.createLinearGradient(0, 0, w, h);
                     grad.addColorStop(0, 'rgba(253, 251, 240, 1)');
                     grad.addColorStop(0.3, 'rgba(222, 239, 233, 0.8)');
                     grad.addColorStop(1, 'rgba(237, 229, 213, 1)');
                     rCtx.fillStyle = grad;
                     rCtx.fillRect(0, 0, w, h);
+
                     rCtx.save();
                     rCtx.globalCompositeOperation = 'overlay';
                     rCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; rCtx.lineWidth = 1;
@@ -341,40 +437,19 @@
                     }
                     rCtx.restore();
 
-                    // --- IDLE FISH ANIMATION: AVOID ONLY NECESSARY POPUPS ---
                     const idleTime = now - mouse.lastMove;
                     if (idleTime > 2000) {
-                        let minX = 100;
-                        let maxX = w - 100;
-                        let minY = 180; 
-                        let maxY = h - 120; 
-
-                        // Allowing fish to swim over index window (left side)
-                        // But strictly avoiding the Note Drawer (right side) if open
+                        let minX = 100, maxX = w - 100, minY = 180, maxY = h - 120; 
                         if (selectedNote) maxX = w - 320;
-
                         if (minX > maxX) { minX = 40; maxX = w - 40; }
-                        
-                        const centerX = (minX + maxX) / 2;
-                        const centerY = (minY + maxY) / 2;
-                        const rangeX = (maxX - minX) * 0.35;
-                        const rangeY = (maxY - minY) * 0.3;
-
-                        const roamX = centerX + Math.sin(now * 0.0002) * rangeX;
-                        const roamY = centerY + Math.sin(now * 0.0004) * rangeY;
-                        
-                        const dx = (roamX - mouse.x) * 0.02;
-                        const dy = (roamY - mouse.y) * 0.02;
-                        
-                        if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) {
-                            mouse.angle = Math.atan2(dy, dx);
-                            mouse.x += dx;
-                            mouse.y += dy;
-                        }
+                        const roamX = ((minX + maxX) / 2) + Math.sin(now * 0.0002) * (maxX - minX) * 0.35;
+                        const roamY = ((minY + maxY) / 2) + Math.sin(now * 0.0004) * (maxY - minY) * 0.3;
+                        const dx = (roamX - mouse.x) * 0.02, dy = (roamY - mouse.y) * 0.02;
+                        if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) { mouse.angle = Math.atan2(dy, dx); mouse.x += dx; mouse.y += dy; }
                     }
 
-                    const existingIds = anemonesRef.current.map(a => a.id).join(',');
-                    const currentIds = notes.map(n => n.id).join(',');
+                    const existingIds = anemonesRef.current.map(a => a.id).sort().join(',');
+                    const currentIds = notes.map(n => n.id).sort().join(',');
                     if (notes.length > 0 && existingIds !== currentIds) {
                         const lengths = notes.map(n => n.charCount), maxLen = Math.max(...lengths), minLen = Math.min(...lengths);
                         const newAnemones = [];
@@ -389,6 +464,8 @@
                             newAnemones.push(new AnemoneNode(n.id, nx, ny, lightPalette[i % lightPalette.length], i % lightPalette.length, relativeScale));
                         });
                         anemonesRef.current = newAnemones;
+                    } else if (notes.length === 0) {
+                        anemonesRef.current = [];
                     }
 
                     let closestId = null, minDistance = Infinity;
@@ -422,7 +499,7 @@
                 };
                 frameId = requestAnimationFrame(render);
                 return () => { cancelAnimationFrame(frameId); window.removeEventListener('resize', handleResize); };
-            }, [notes, selectedNote, lightPalette, hoveredNodeId]);
+            }, [notes, selectedNote, isListOpen, lightPalette, hoveredNodeId]);
 
             const updateMouse = (nx, ny) => {
                 const dx = nx - mouseRef.current.x, dy = ny - mouseRef.current.y;
@@ -432,80 +509,108 @@
 
             return (
                 <div 
-                    className="relative w-full h-screen overflow-hidden select-none cursor-none bg-[#FDFBF0]"
+                    className="relative w-full h-screen overflow-hidden select-none cursor-none bg-[#FDFBF0] lowercase"
                     onMouseMove={(e) => updateMouse(e.clientX, e.clientY)}
                     onTouchStart={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onTouchMove={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onClick={() => {
-                        if (hoveredNodeId) { setSelectedNote(notes.find(n => n.id === hoveredNodeId)); setIsAddVisible(false); } 
+                        if (hoveredNodeId) { 
+                            const n = notes.find(n => n.id === hoveredNodeId);
+                            handleAnemoneSelection(n);
+                            setIsAddVisible(false);
+                        } 
                         else { setIsListOpen(false); setSelectedNote(null); setIsAddVisible(false); }
                     }}
                 >
                     <canvas ref={reefCanvasRef} className="absolute inset-0 block pointer-events-none z-0" />
                     <canvas ref={cursorCanvasRef} className="absolute inset-0 block pointer-events-none z-[200]" />
 
+                    {isSyncing && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[50]">
+                            <div className="text-[10px] tracking-[0.5em] opacity-30 font-sans animate-pulse-soft">syncing reef...</div>
+                        </div>
+                    )}
+
                     <div className="absolute bottom-20 left-6 sm:bottom-8 sm:left-8 z-[120]">
                         <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsAddVisible(false); }} 
-                                className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md text-black/60 hover:text-black transition-all font-sans text-xs sm:text-[10px] uppercase tracking-widest shadow-lg sm:shadow-none">
-                            ☰ Reef Index
+                                className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md text-black/60 hover:text-black transition-all font-sans text-xs sm:text-[10px] tracking-widest shadow-lg sm:shadow-none">
+                            ☰ index
                         </button>
                     </div>
 
                     <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-36 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-slate-200 border rounded-sm flex flex-col p-4 shadow-xl backdrop-blur-md`}>
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
-                                <div className="text-[10px] uppercase tracking-[0.3em] opacity-40 font-sans leading-tight">Index</div>
-                                <div className="text-[7px] uppercase tracking-[0.1em] opacity-25 font-sans mt-1">Status: {syncStatus}</div>
-                                <div className="flex gap-1 mt-2">
-                                    <button onClick={() => setSortMode('newest')} className={`text-[7px] uppercase px-2 py-1 rounded-sm ${sortMode === 'newest' ? 'bg-black text-white' : 'bg-black/5 text-black/40'}`}>Newest</button>
-                                    <button onClick={() => setSortMode('oldest')} className={`text-[7px] uppercase px-2 py-1 rounded-sm ${sortMode === 'oldest' ? 'bg-black text-white' : 'bg-black/5 text-black/40'}`}>Oldest</button>
-                                </div>
+                                <div className="text-[10px] tracking-[0.3em] opacity-40 font-sans leading-tight">index</div>
+                                <div className={`text-[7px] tracking-[0.1em] font-sans mt-1 ${syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
                             </div>
-                            <button onClick={() => setIsAddVisible(!isAddVisible)} className="text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">{isAddVisible ? 'Close' : 'Plant'}</button>
+                            <div className="flex items-center gap-3">
+                                <button onClick={fetchFromReef} disabled={isSyncing} className="text-[9px] tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
+                                <button onClick={() => setIsAddVisible(!isAddVisible)} className="text-[9px] tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">{isAddVisible ? 'close' : 'attach'}</button>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-1 mb-2">
+                            <button onClick={() => setSortMode('newest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'newest' ? 'bg-black text-white' : 'bg-black/5 text-black/40'}`}>newest</button>
+                            <button onClick={() => setSortMode('oldest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'oldest' ? 'bg-black text-white' : 'bg-black/5 text-black/40'}`}>oldest</button>
                         </div>
 
                         <div className="h-[1px] w-full bg-slate-100 mb-4 mt-2" />
                         {isAddVisible && (
                             <div className="mb-6 p-4 rounded-sm border border-black/5 bg-black/5 animate-in fade-in zoom-in-95 duration-200">
-                                <div className="text-[9px] uppercase tracking-widest mb-3 opacity-50 font-sans">New Drift</div>
-                                <input type="text" placeholder="Title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-black/20 text-black text-[12px] mb-3 p-1 font-sans focus:outline-none" />
-                                <textarea placeholder="Markdown content..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-black/10 text-black rounded-sm text-[11px] mb-3 p-2 font-serif focus:outline-none bg-white/40" />
-                                <div className="text-[8px] uppercase tracking-widest mb-1 opacity-30 font-sans">GitHub Token</div>
-                                <input type="password" placeholder="ghp_..." value={githubToken} onChange={(e) => setGithubToken(e.target.value)} className="w-full bg-transparent border-b border-black/20 text-black text-[11px] mb-4 p-1 font-sans focus:outline-none" />
-                                <button onClick={plantNewDrift} disabled={isSyncing} className="w-full py-2 rounded-sm text-[10px] uppercase font-sans transition-all bg-black/10 hover:bg-black text-black hover:text-white">{isSyncing ? 'Pushing...' : 'Plant Anemone'}</button>
+                                {syncStatus === 'rate limited' && (
+                                    <div className="mb-4 text-[8px] text-red-500 font-sans leading-tight p-2 bg-red-50 rounded-sm border border-red-100">
+                                        rate limit exceeded. please enter a valid access token to see your anemones.
+                                    </div>
+                                )}
+                                <div className="text-[9px] tracking-widest mb-3 opacity-50 font-sans">new anemone</div>
+                                <input type="text" placeholder="title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-black/20 text-black text-[12px] mb-3 p-1 font-sans focus:outline-none" />
+                                <textarea placeholder="write here..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-black/10 text-black rounded-sm text-[11px] mb-3 p-2 font-serif focus:outline-none bg-white/40" />
+                                <div className="flex flex-col gap-2 mt-2">
+                                    <div className="text-[8px] tracking-widest opacity-30 font-sans">access token</div>
+                                    <input type="password" placeholder="ghp_..." value={accessToken} onChange={(e) => setAccessToken(e.target.value)} className="w-full bg-transparent border-b border-black/20 text-black text-[11px] mb-2 p-1 font-sans focus:outline-none" />
+                                    <button onClick={attachToPermanent} disabled={isSyncing} className="w-full py-2 rounded-sm text-[10px] font-sans transition-all bg-blue-500/10 hover:bg-blue-500 text-blue-700 hover:text-white border border-blue-500/20">attach permanently</button>
+                                </div>
                             </div>
                         )}
 
-                        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-1">
-                            {sortedNotes.length === 0 && !isSyncing && <div className="text-[11px] opacity-30 italic p-2">Sea is empty.</div>}
+                        <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar pr-2 flex flex-col gap-1">
+                            {notes.length === 0 && !isSyncing && syncStatus !== 'rate limited' && <div className="text-[11px] opacity-30 italic p-2">sea is empty.</div>}
+                            {notes.length === 0 && !isSyncing && syncStatus === 'rate limited' && <div className="text-[11px] opacity-30 italic p-2 text-red-400">waiting for token...</div>}
                             {sortedNotes.map(note => (
-                                <button key={note.id} onClick={() => setSelectedNote(note)} className={`text-left p-2 rounded-sm text-[13px] lowercase tracking-wider transition-all font-dyslexic ${selectedNote?.id === note.id ? 'bg-black/5 text-slate-900 font-bold' : 'text-slate-600 hover:bg-black/5'}`}>{note.title}</button>
+                                <button key={note.id} onClick={() => handleAnemoneSelection(note)} className={`text-left p-2 rounded-sm text-[13px] tracking-wider transition-all font-dyslexic flex justify-between items-center break-words hyphen-auto ${selectedNote?.id === note.id ? 'bg-black/5 text-slate-900 font-bold' : 'text-slate-600 hover:bg-black/5'}`}>
+                                    <span className="flex-1 pr-2">{note.title}</span>
+                                </button>
                             ))}
                         </div>
                     </div>
 
                     {!selectedNote && !isListOpen && notes.map(n => (
-                        <div key={n.id} ref={el => labelRefs.current[n.id] = el} className="absolute left-0 top-0 text-[14px] leading-tight lowercase tracking-[0.05em] font-dyslexic pointer-events-none transition-opacity duration-300 will-change-transform z-10 text-slate-500" style={{ opacity: 0 }}>{n.title?.toLowerCase()}</div>
+                        <div key={n.id} ref={el => labelRefs.current[n.id] = el} className="absolute left-0 top-0 text-[14px] leading-tight tracking-[0.05em] font-dyslexic pointer-events-none transition-opacity duration-300 will-change-transform z-10 text-slate-500 break-words max-w-[120px] hyphen-auto" style={{ opacity: 0 }}>{n.title}</div>
                     ))}
 
                     <div className="absolute top-8 left-8 sm:top-12 sm:left-12 pointer-events-none z-20">
-                        <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-[#2d3748] uppercase leading-none font-serif">Reef</h1>
-                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-2 sm:mt-4 opacity-40 font-sans uppercase text-[#2d3748]">Works by Anna Emerson</p>
+                        <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-[#2d3748] leading-none font-serif uppercase">REEF</h1>
+                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-0.5 sm:mt-1 opacity-40 font-sans text-[#2d3748]">works by anna emerson</p>
                     </div>
 
                     <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} bg-white/95 border-slate-200 border rounded-sm flex flex-col overflow-hidden shadow-2xl backdrop-blur-md`} >
-                        <div className="flex-1 p-8 flex flex-col relative">
+                        <div className="flex-1 p-8 flex flex-col relative overflow-hidden">
                             <div className="absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-multiply bg-[url('https://www.transparenttextures.com/patterns/felt.png')]" />
-                            <button onClick={() => setSelectedNote(null)} className="self-end mb-4 text-[10px] uppercase tracking-widest transition-all px-2 py-1 rounded-sm text-slate-400 hover:text-slate-900 font-sans">Close ✕</button>
+                            <button onClick={() => setSelectedNote(null)} className="self-end mb-4 text-[10px] uppercase tracking-widest transition-all px-2 py-1 rounded-sm text-slate-400 hover:text-slate-900 font-sans">close ✕</button>
+                            
                             <div className="mb-4">
-                                <h2 className="text-2xl font-serif font-normal leading-tight text-slate-900">{selectedNote?.title}</h2>
+                                <h2 className="text-2xl font-serif font-normal leading-tight text-slate-900 break-words hyphen-auto">{selectedNote?.title}</h2>
                                 <div className="h-[1px] w-full mt-2 bg-slate-100" />
                             </div>
-                            <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar text-slate-700 font-serif">
-                                {selectedNote && <div className="prose prose-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
+
+                            <div className="flex-1 overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar text-slate-700 font-serif hyphen-auto">
+                                {selectedNote && <div className="prose prose-sm leading-relaxed break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
                             </div>
-                            <div className={`mt-8 pt-6 border-t border-slate-100 text-slate-300 text-[8px] uppercase tracking-[0.3em] font-sans`}>
-                                {selectedNote?.date ? `${selectedNote.date}` : "Date: Scanning..."}
+                            
+                            <div className={`mt-8 pt-6 border-t border-slate-100 text-slate-300 text-[8px] uppercase tracking-[0.3em] font-sans flex justify-between flex-shrink-0`}>
+                                <span>{selectedNote?.date ? `date: ${selectedNote.date}` : "date: ..."}</span>
+                                <span>permanent sea</span>
                             </div>
                         </div>
                     </div>
