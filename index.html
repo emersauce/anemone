@@ -34,12 +34,11 @@
         const { useState, useEffect, useRef, useMemo } = React;
 
         // --- GITHUB API CONFIGURATION ---
-        // Replace these with your public repository details
         const GITHUB_CONFIG = {
-            owner: 'emersauce', // e.g., 'octocat'
-            repo: 'anemone',      // e.g., 'my-drifts'
-            path: 'drifts',         // The folder containing .md files
-            branch: 'network'          // Usually 'main' or 'master'
+            owner: 'emersauce',
+            repo: 'anemone',
+            path: 'drifts',
+            branch: 'network'
         };
 
         const renderMarkdown = (text) => {
@@ -68,8 +67,10 @@
         class AnemoneNode {
             constructor(id, x, y, palette, paletteIndex) {
                 this.id = id;
-                this.x = x; this.y = y;
-                this.baseX = x; this.baseY = y;
+                this.x = x;
+                this.y = y;
+                this.baseX = x;
+                this.baseY = y;
                 this.paletteIndex = paletteIndex;
                 this.color = palette.base;
                 this.glow = palette.glow;
@@ -172,9 +173,7 @@
             const cursorCanvasRef = useRef(null);
             const labelRefs = useRef({});
             
-            // Starts empty
             const [notes, setNotes] = useState([]);
-            
             const [selectedNote, setSelectedNote] = useState(null);
             const [hoveredNodeId, setHoveredNodeId] = useState(null);
             const [isListOpen, setIsListOpen] = useState(false);
@@ -208,7 +207,7 @@
 
             const fetchFromGithub = async () => {
                 const { owner, repo, path, branch } = GITHUB_CONFIG;
-                if (owner === 'your-username') {
+                if (!owner || owner === 'your-username') {
                     setSyncStatus('Config Required');
                     return;
                 }
@@ -219,7 +218,10 @@
                     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
                     const response = await fetch(apiUrl);
                     
-                    if (!response.ok) throw new Error("Folder not found");
+                    if (!response.ok) {
+                      const errorData = await response.json();
+                      throw new Error(errorData.message || "Folder not found");
+                    }
                     
                     const contents = await response.json(); 
                     const markdownFiles = contents.filter(item => 
@@ -252,7 +254,7 @@
                     }
                 } catch (err) {
                     setSyncStatus('Sync Error');
-                    console.error(err);
+                    console.error("Sync failed:", err);
                     setPasswordError(true);
                     setTimeout(() => setPasswordError(false), 2000);
                 } finally {
@@ -260,9 +262,9 @@
                 }
             };
 
-            // Auto-fetch on mount
             useEffect(() => { 
-                fetchFromGithub(); 
+                const timer = setTimeout(fetchFromGithub, 500);
+                return () => clearTimeout(timer);
             }, []);
 
             const handlePasswordCheck = () => {
@@ -344,7 +346,9 @@
                             if (p.x < -20) p.x = w + 20; if (p.x > w + 20) p.x = -20;
                             if (p.y < -20) p.y = h + 20; if (p.y > h + 20) p.y = -20;
                             rCtx.globalAlpha = p.o;
-                            rCtx.beginPath(); rCtx.arc(p.x, p.y, p.s, 0, Math.PI * 2); rCtx.fill();
+                            rCtx.beginPath();
+                            rCtx.arc(p.x, p.y, p.s, 0, Math.PI * 2);
+                            rCtx.fill();
                         });
                     }
                     rCtx.restore();
@@ -418,7 +422,7 @@
                             cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); cCtx.fill();
                             cCtx.fillStyle = '#fff'; cCtx.fillRect(-6, -7, 4, 14); cCtx.fillRect(4, -5, 3, 10);
                             cCtx.fillStyle = '#000'; cCtx.beginPath(); cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); cCtx.fill();
-                            cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); ctx.moveTo(-14, 0);
+                            cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.moveTo(-14, 0);
                             cCtx.lineTo(-22, -6 + Math.sin(now * 0.01) * 2);
                             cCtx.lineTo(-22, 6 - Math.sin(now * 0.01) * 2);
                             cCtx.fill();
@@ -519,7 +523,7 @@
                         <p className={`text-[9px] tracking-[0.4em] mt-4 opacity-40 font-sans uppercase ${isDark ? 'text-[#a0fbff]' : 'text-[#2d3748]'} transition-colors duration-1000`}>Looking down into the drift</p>
                     </div>
 
-                    <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} ${isDark ? 'bg-slate-900/90 border-slate-700 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.8)]' : 'bg-white/95 border-slate-200 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.15)]'} border rounded-sm flex flex-col overflow-hidden`} >
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} ${isDark ? 'bg-slate-900/90 border-slate-700 shadow-2xl' : 'bg-white/95 border-slate-200 shadow-xl'} border rounded-sm flex flex-col overflow-hidden`} >
                         <div className="flex-1 p-8 flex flex-col relative">
                             <div className="absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-multiply bg-[url('https://www.transparenttextures.com/patterns/felt.png')]" />
                             <button onClick={() => setSelectedNote(null)} className={`self-end mb-4 text-[10px] uppercase tracking-widest transition-all px-2 py-1 rounded-sm ${isDark ? 'text-[#a0fbff]/50 hover:text-[#a0fbff]' : 'text-slate-400 hover:text-slate-900'} font-sans`}>Close ✕</button>
