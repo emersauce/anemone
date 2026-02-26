@@ -492,8 +492,10 @@
                     <canvas ref={reefCanvasRef} className="absolute inset-0 block pointer-events-none z-0" />
                     <canvas ref={cursorCanvasRef} className="absolute inset-0 block pointer-events-none z-[200]" />
 
-                    <div className="absolute bottom-8 left-8 z-[120]">
-                        <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsAddVisible(false); }} className="px-6 py-2 rounded-full border border-black/10 bg-black/5 text-black/40 hover:text-black transition-all duration-500 font-sans text-[10px] uppercase tracking-widest">
+                    {/* MOBILE FRIENDLY INDEX BUTTON */}
+                    <div className="absolute bottom-10 left-6 sm:bottom-8 sm:left-8 z-[120]">
+                        <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsAddVisible(false); }} 
+                                className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-black/20 bg-white/80 backdrop-blur-sm text-black/60 hover:text-black transition-all duration-500 font-sans text-xs sm:text-[10px] uppercase tracking-widest shadow-lg sm:shadow-none">
                             ☰ Reef Index
                         </button>
                     </div>
@@ -536,9 +538,9 @@
                         <div key={n.id} ref={el => labelRefs.current[n.id] = el} className="absolute left-0 top-0 text-[14px] leading-tight lowercase tracking-[0.05em] font-dyslexic pointer-events-none transition-opacity duration-500 will-change-transform z-10" style={{ opacity: 0 }}>{n.title?.toLowerCase()}</div>
                     ))}
 
-                    <div className="absolute top-12 left-12 pointer-events-none z-20">
-                        <h1 className="text-5xl tracking-[0.4em] font-light italic text-[#2d3748] uppercase leading-none font-serif">Reef</h1>
-                        <p className="text-[9px] tracking-[0.4em] mt-4 opacity-40 font-sans uppercase text-[#2d3748]">Looking down into the drift</p>
+                    <div className="absolute top-8 left-8 sm:top-12 sm:left-12 pointer-events-none z-20">
+                        <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-[#2d3748] uppercase leading-none font-serif">Reef</h1>
+                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-2 sm:mt-4 opacity-40 font-sans uppercase text-[#2d3748]">Looking down into the drift</p>
                     </div>
 
                     <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} bg-white/95 border-slate-200 border rounded-sm flex flex-col overflow-hidden shadow-2xl`} >
