@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>anemone</title>
-    <!-- CDNs for React, ReactDOM, Babel, and Tailwind -->
+    <!-- React and Tailwind Dependencies -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -20,11 +20,12 @@
             overflow: hidden; 
             background-color: #e0f8f7; 
             touch-action: none; 
+            user-select: none;
         }
         .font-dyslexic { font-family: 'OpenDyslexic', sans-serif !important; }
-        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { 
-            background: rgba(0,0,0,0.1); 
+            background: rgba(0,0,0,0.08); 
             border-radius: 10px; 
         }
         canvas { 
@@ -43,6 +44,14 @@
         .animate-pulse-soft {
             animation: pulse-soft 3s ease-in-out infinite;
         }
+        .prose img {
+            margin-left: auto;
+            margin-right: auto;
+            max-height: 400px;
+            object-fit: contain;
+        }
+        /* Reader Panel transitions */
+        .no-morph { transition: opacity 0.3s ease-out !important; transform: none !important; }
     </style>
 </head>
 <body>
@@ -61,9 +70,10 @@
         const fetchWithRetry = async (url, options = {}, retries = 3, backoff = 1000) => {
             try {
                 const response = await fetch(url, options);
+                if (response.status === 401) throw new Error("only users with private key may contribute");
                 if (response.status === 403) {
-                    const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
-                    if (rateLimitRemaining === '0') throw new Error('rate limited');
+                    const remaining = response.headers.get('x-ratelimit-remaining');
+                    if (remaining === '0') throw new Error('rate limited');
                 }
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
@@ -71,6 +81,7 @@
                 }
                 return response;
             } catch (error) {
+                if (error.message === "only users with private key may contribute") throw error;
                 if (retries > 0 && error.message !== 'rate limited') {
                     await new Promise(resolve => setTimeout(resolve, backoff));
                     return fetchWithRetry(url, options, retries - 1, backoff * 2);
@@ -79,12 +90,41 @@
             }
         };
 
+        /**
+         * Enhanced Markdown Renderer with Editorial Hierarchy.
+         * Body text is kept small, while headings are scaled for contrast.
+         */
         const renderMarkdown = (text) => {
             if (!text) return "";
+            const rawBase = `https://raw.githubusercontent.com/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/${REPO_CONFIG.branch}/`;
+            const folderBase = `${rawBase}${REPO_CONFIG.path}/`;
+
+            const resolveUrl = (url) => {
+                let u = url.trim();
+                if (u.includes('github.com') && u.includes('/blob/')) {
+                    u = u.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/');
+                }
+                if (!u.startsWith('http') && !u.startsWith('data:') && !u.startsWith('/')) {
+                    return folderBase + u;
+                }
+                if (u.startsWith('/')) {
+                    return rawBase + u.slice(1);
+                }
+                return u;
+            };
+
             return text
-                .replace(/^### (.*$)/gim, '<h3 class="text-lg font-serif mt-4 mb-1 text-slate-600 font-normal">$1</h3>')
-                .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-5 mb-1 text-slate-800 font-normal">$2</h2>')
-                .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-serif mb-2 text-slate-900 font-normal">$1</h1>')
+                .replace(/!\[(.*?)\]\((.*?)\)/gim, (match, alt, url) => {
+                    const fullUrl = resolveUrl(url);
+                    return `<img src="${fullUrl}" alt="${alt}" class="my-8 rounded-sm shadow-sm border border-slate-100" onerror="this.style.display='none'" />`;
+                })
+                .replace(/\[(.*?)\]\((.*?)\)/gim, (match, label, url) => {
+                    const fullUrl = resolveUrl(url);
+                    return `<a href="${fullUrl}" target="_blank" rel="noopener noreferrer" class="text-teal-700 underline underline-offset-4 hover:text-teal-900 transition-colors">${label}</a>`;
+                })
+                .replace(/^### (.*$)/gim, '<h3 class="text-lg font-serif mt-6 mb-2 text-slate-700 font-medium">$1</h3>')
+                .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-8 mb-3 text-slate-800 font-normal border-b border-slate-100 pb-1">$2</h2>')
+                .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-serif mb-4 text-slate-950 font-normal text-center">$1</h1>')
                 .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
                 .replace(/\*(.*)\*/gim, '<em>$1</em>')
                 .replace(/\n/gim, '<br />');
@@ -116,8 +156,7 @@
                 for (let i = 0; i < count; i++) {
                     const angle = (Math.PI * 2 / count) * i;
                     const segments = [];
-                    const lengthVariation = 0.85 + Math.random() * 0.3;
-                    const segCount = Math.max(3, Math.floor(8 * this.scale * lengthVariation));
+                    const segCount = Math.max(3, Math.floor(8 * this.scale));
                     const segLen = (7 + Math.random() * 4) * this.scale;
                     for (let j = 0; j < segCount; j++) {
                         segments.push(new TentacleSegment(x, y, segLen, angle));
@@ -132,8 +171,7 @@
                 this.x = this.baseX + driftX;
                 this.y = this.baseY + driftY;
                 const dx = this.x - mouse.x, dy = this.y - mouse.y;
-                const distToMouse = Math.sqrt(dx*dx + dy*dy);
-                const isNear = distToMouse < 250;
+                const isNear = Math.sqrt(dx*dx + dy*dy) < 250;
 
                 this.tentacles.forEach(t => {
                     let lastX = this.x, lastY = this.y;
@@ -150,7 +188,7 @@
                         let diff = targetAngle - seg.currentAngle;
                         while (diff < -Math.PI) diff += Math.PI * 2;
                         while (diff > Math.PI) diff -= Math.PI * 2;
-                        seg.currentAngle += diff * 0.02; 
+                        seg.currentAngle += diff * 0.025; 
                         seg.x = lastX; seg.y = lastY;
                         seg.targetX = seg.x + Math.cos(seg.currentAngle) * seg.len;
                         seg.targetY = seg.y + Math.sin(seg.currentAngle) * seg.len;
@@ -178,8 +216,7 @@
                 grad.addColorStop(0.75, this.tipColor);
                 grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
 
-                ctx.lineCap = 'round'; 
-                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round'; ctx.lineJoin = 'round';
                 ctx.lineWidth = (4 + 6 * this.scale);
                 ctx.strokeStyle = grad;
                 ctx.globalAlpha = (isSelected ? 0.9 : 0.7) * fadeInAlpha;
@@ -190,15 +227,6 @@
                     t.segments.forEach(seg => ctx.lineTo(seg.targetX, seg.targetY));
                 });
                 ctx.stroke();
-
-                ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.beginPath();
-                this.tentacles.forEach(t => {
-                    const tip = t.segments[t.segments.length - 1];
-                    ctx.moveTo(tip.targetX, tip.targetY);
-                    ctx.arc(tip.targetX, tip.targetY, 1.3 * this.scale, 0, Math.PI * 2);
-                });
-                ctx.fill();
                 ctx.restore();
             }
         }
@@ -210,6 +238,8 @@
             
             const [notes, setNotes] = useState([]);
             const [selectedNote, setSelectedNote] = useState(null);
+            const [isReadingFullScreen, setIsReadingFullScreen] = useState(false);
+            const [isReadAllMode, setIsReadAllMode] = useState(false);
             const [hoveredNodeId, setHoveredNodeId] = useState(null);
             const [isListOpen, setIsListOpen] = useState(false);
             const [isAddVisible, setIsAddVisible] = useState(false);
@@ -232,12 +262,12 @@
             const particlesRef = useRef([]);
 
             const lightPalette = useMemo(() => [
-                { base: '#D4FF00', tip: '#F7FFD1' }, // Chartreuse
-                { base: '#40E0D0', tip: '#D1FFFA' }, // Turquoise
-                { base: '#FFB74D', tip: '#FFF0D1' }, // Yolk Orange
-                { base: '#F48FB1', tip: '#FFD9E6' }, // Petal Pink
-                { base: '#CE93D8', tip: '#F5E6FA' }, // Lavender
-                { base: '#81C784', tip: '#E6F5E7' }  // Sea Glass
+                { base: '#D4FF00', tip: '#F7FFD1' }, 
+                { base: '#40E0D0', tip: '#D1FFFA' }, 
+                { base: '#FFB74D', tip: '#FFF0D1' }, 
+                { base: '#F48FB1', tip: '#FFD9E6' }, 
+                { base: '#CE93D8', tip: '#F5E6FA' }, 
+                { base: '#81C784', tip: '#E6F5E7' }  
             ], []);
 
             const sortedNotes = useMemo(() => {
@@ -247,131 +277,101 @@
                 return sn;
             }, [notes, sortMode]);
 
-            // --- REEF PLACEMENT LOGIC (OUTSIDE ANIMATION LOOP) ---
             useEffect(() => {
-                if (notes.length === 0) {
-                    anemonesRef.current = [];
-                    return;
-                }
-
-                const w = window.innerWidth;
-                const h = window.innerHeight;
+                if (notes.length === 0) { anemonesRef.current = []; return; }
+                const w = window.innerWidth, h = window.innerHeight;
                 const lengths = notes.map(n => n.charCount);
-                const maxLen = Math.max(...lengths);
-                const minLen = Math.min(...lengths);
-                
+                const maxLen = Math.max(...lengths), minLen = Math.min(...lengths);
                 const newAnemones = [];
-                let clearanceFactor = 240; // 80% increased clearance base
+                let clearanceFactor = 240; 
 
                 for (let i = 0; i < notes.length; i++) {
                     const n = notes[i];
-                    const relativeScale = 1.0 + ((n.charCount - minLen) / (maxLen - minLen || 1)) * 0.5;
-                    let nx, ny, spotFound = false, nodeAttempts = 0;
-                    
-                    while (nodeAttempts < 1000 && !spotFound) {
-                        nx = (0.15 + Math.random() * 0.7) * w;
-                        ny = (0.25 + Math.random() * 0.5) * h;
+                    const relativeScale = 0.8 + ((n.charCount - minLen) / (maxLen - minLen || 1)) * 0.5;
+                    let nx, ny, spotFound = false, attempts = 0;
+                    while (attempts < 1500 && !spotFound) {
+                        nx = (0.1 + Math.random() * 0.8) * w;
+                        ny = (0.2 + Math.random() * 0.6) * h;
                         spotFound = true;
-                        for (let other of newAnemones) { 
-                            // Calculate required distance based on scale and current clearanceFactor
-                            const minDist = (clearanceFactor * relativeScale) + (clearanceFactor * other.scale);
-                            if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < minDist) {
-                                spotFound = false;
-                                break;
-                            } 
+                        if (nx < 400 && ny < 240) spotFound = false; // Avoid title area
+                        if (spotFound) {
+                            for (let other of newAnemones) { 
+                                const minDist = (clearanceFactor * relativeScale) + (clearanceFactor * other.scale);
+                                if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < minDist) { spotFound = false; break; } 
+                            }
                         }
-                        
-                        // If we can't find a spot after many attempts, slightly reduce clearance to allow a fit
-                        if (nodeAttempts > 500) clearanceFactor *= 0.999;
-                        nodeAttempts++;
+                        if (attempts > 500) clearanceFactor *= 0.999;
+                        attempts++;
                     }
                     newAnemones.push(new AnemoneNode(n.id, nx, ny, lightPalette[i % lightPalette.length], relativeScale));
                 }
-                
-                // Stable update: Replace the entire reef once layout is solved
                 anemonesRef.current = newAnemones;
-            }, [notes.length]); // Only re-layout when anemones are added or removed
+            }, [notes.length]);
 
             useEffect(() => {
                 const handleKeyDown = (e) => {
-                    if (e.key === 'Escape') {
-                        setIsListOpen(false); setIsAddVisible(false); setSelectedNote(null);
+                    if (e.key === 'Escape') { 
+                        setIsListOpen(false); setIsAddVisible(false); 
+                        setSelectedNote(null); setIsReadAllMode(false);
                     }
                 };
                 window.addEventListener('keydown', handleKeyDown);
                 const p = [];
                 for(let i=0; i<45; i++) p.push({
-                    x: Math.random() * window.innerWidth,
-                    y: Math.random() * window.innerHeight,
-                    s: 0.4 + Math.random() * 1.5,
-                    v: 0.05 + Math.random() * 0.12,
+                    x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
+                    s: 0.4 + Math.random() * 1.5, v: 0.05 + Math.random() * 0.12,
                     c: `rgba(255, 255, 255, ${0.2 + Math.random() * 0.3})`
                 });
                 particlesRef.current = p;
                 return () => window.removeEventListener('keydown', handleKeyDown);
             }, []);
 
-            const fetchDateForAnemone = async (path) => {
-                const { owner, repo, branch } = REPO_CONFIG;
-                const trimmedToken = accessToken.trim();
-                const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
-                try {
-                    const commitUrl = `https://api.github.com/repos/${owner}/${repo}/commits?path=${path}&sha=${branch}&per_page=1`;
-                    const commitRes = await fetchWithRetry(commitUrl, { headers });
-                    if (commitRes.ok) {
-                        const commitData = await commitRes.json();
-                        if (commitData.length > 0) return commitData[0].commit.committer.date.split('T')[0];
-                    }
-                } catch (e) {}
-                return null;
-            };
-
             const fetchFromReef = useCallback(async () => {
-                const { owner, repo, path, branch } = REPO_CONFIG;
                 const trimmedToken = accessToken.trim();
                 const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
-
-                setIsSyncing(true);
-                setSyncStatus('syncing reef...');
+                setIsSyncing(true); setSyncStatus('syncing reef...');
                 try {
-                    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+                    const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${REPO_CONFIG.path}?ref=${REPO_CONFIG.branch}`;
                     const response = await fetchWithRetry(apiUrl, { headers });
                     const contents = await response.json(); 
-                    const markdownFiles = contents.filter(item => item.type === 'file' && /\.(md|txt|MD|TXT)$/.test(item.name));
-                    if (markdownFiles.length === 0) {
-                        setNotes([]); setSyncStatus('folder empty'); setIsSyncing(false);
-                        return;
-                    }
+                    const markdownFiles = contents.filter(item => item.type === 'file' && /\.(md|txt)$/i.test(item.name));
+                    if (markdownFiles.length === 0) { setNotes([]); setSyncStatus('folder empty'); setIsSyncing(false); return; }
+                    
                     const fetchedNotes = [];
                     for (const file of markdownFiles) {
                         try {
                             const fileRes = await fetch(file.download_url);
                             const text = await fileRes.text();
                             fetchedNotes.push({
-                                id: `anemone-${file.sha}`,
-                                path: file.path, 
+                                id: `anemone-${file.sha}`, path: file.path, 
                                 title: file.name.replace(/\.[^/.]+$/, "").replace(/-/g, ' ').toLowerCase(),
-                                date: null, 
-                                content: text,
-                                charCount: text.length 
+                                date: null, content: text, charCount: text.length 
                             });
                         } catch (e) {}
                     }
-                    setNotes(fetchedNotes);
-                    setSyncStatus('active');
+                    setNotes(fetchedNotes); setSyncStatus('active');
                 } catch (err) {
-                    setSyncStatus(err.message === 'rate limited' ? 'rate limited' : 'sync error');
+                    setSyncStatus(err.message.includes('private key') ? err.message : 'sync error');
                 } finally { setIsSyncing(false); }
             }, [accessToken]);
 
             const handleAnemoneSelection = async (note) => {
                 setSelectedNote(note);
                 if (note && !note.date) {
-                    const date = await fetchDateForAnemone(note.path);
-                    if (date) {
-                        setNotes(prev => prev.map(n => n.id === note.id ? {...n, date} : n));
-                        setSelectedNote(prev => prev && prev.id === note.id ? {...prev, date} : prev);
-                    }
+                    const trimmedToken = accessToken.trim();
+                    const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
+                    try {
+                        const commitUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/commits?path=${note.path}&sha=${REPO_CONFIG.branch}&per_page=1`;
+                        const res = await fetch(commitUrl, { headers });
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.length > 0) {
+                                const date = data[0].commit.committer.date.split('T')[0];
+                                setNotes(prev => prev.map(n => n.id === note.id ? {...n, date} : n));
+                                setSelectedNote(prev => prev?.id === note.id ? {...prev, date} : prev);
+                            }
+                        }
+                    } catch (e) {}
                 }
             };
 
@@ -379,23 +379,28 @@
                 const trimmedToken = accessToken.trim();
                 if (!newNoteTitle || !newNoteContent || !trimmedToken) { setSyncStatus('token required'); return; }
                 setIsSyncing(true); setSyncStatus('attaching...');
-                const { owner, repo, path, branch } = REPO_CONFIG;
                 const fileName = newNoteTitle.toLowerCase().replace(/\s+/g, '-') + '.md';
                 const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}/${fileName}`;
                 try {
-                    const checkRes = await fetch(`${apiUrl}?ref=${branch}`, { headers: { 'Authorization': `Bearer ${trimmedToken}` } });
+                    const checkRes = await fetch(`${apiUrl}?ref=${REPO_CONFIG.branch}`, { headers: { 'Authorization': `Bearer ${trimmedToken}` } });
+                    if (checkRes.status === 401) throw new Error("only users with private key may contribute");
                     let sha = null;
                     if (checkRes.ok) { const existingFile = await checkRes.json(); sha = existingFile.sha; }
                     const contentBase64 = btoa(unescape(encodeURIComponent(newNoteContent)));
                     const response = await fetch(apiUrl, {
                         method: 'PUT',
                         headers: { 'Authorization': `Bearer ${trimmedToken}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: `anemone: ${newNoteTitle}`, content: contentBase64, branch: branch, sha: sha })
+                        body: JSON.stringify({ message: `anemone: ${newNoteTitle}`, content: contentBase64, branch: REPO_CONFIG.branch, sha: sha })
                     });
-                    if (!response.ok) throw new Error("attach failed");
+                    if (!response.ok) {
+                        if (response.status === 401) throw new Error("only users with private key may contribute");
+                        throw new Error("attach failed");
+                    }
                     setSyncStatus('attached'); setNewNoteTitle(""); setNewNoteContent(""); setIsAddVisible(false);
                     setTimeout(fetchFromReef, 1500);
-                } catch (err) { setSyncStatus(err.message.substring(0, 20).toLowerCase()); } finally { setIsSyncing(false); }
+                } catch (err) { 
+                    setSyncStatus(err.message.includes('private key') ? err.message : 'error'); 
+                } finally { setIsSyncing(false); }
             };
 
             useEffect(() => { fetchFromReef(); }, []);
@@ -407,14 +412,13 @@
                 const rCtx = rCanvas.getContext('2d', { alpha: false });
                 const cCtx = cursorCanvas.getContext('2d');
                 let frameId;
+
                 const handleResize = () => {
                     const dpr = window.devicePixelRatio || 1;
                     const cappedDPR = Math.min(dpr, 2);
                     [rCanvas, cursorCanvas].forEach(c => {
-                        c.width = window.innerWidth * cappedDPR;
-                        c.height = window.innerHeight * cappedDPR;
-                        c.style.width = `${window.innerWidth}px`;
-                        c.style.height = `${window.innerHeight}px`;
+                        c.width = window.innerWidth * cappedDPR; c.height = window.innerHeight * cappedDPR;
+                        c.style.width = `${window.innerWidth}px`; c.style.height = `${window.innerHeight}px`;
                     });
                 };
                 window.addEventListener('resize', handleResize);
@@ -429,25 +433,19 @@
                     cCtx.clearRect(0, 0, w, h);
                     
                     const baseGrad = rCtx.createLinearGradient(0, 0, 0, h);
-                    baseGrad.addColorStop(0, '#e0f8f7'); 
-                    baseGrad.addColorStop(1, '#f0f8f7'); 
-                    rCtx.fillStyle = baseGrad;
-                    rCtx.fillRect(0, 0, w, h);
+                    baseGrad.addColorStop(0, '#e0f8f7'); baseGrad.addColorStop(1, '#f0f8f7'); 
+                    rCtx.fillStyle = baseGrad; rCtx.fillRect(0, 0, w, h);
 
-                    const drawPearlPatch = (px, py, color, radius, opacityMultiplier) => {
+                    const drawPearlPatch = (px, py, color, radius, opacity) => {
                         const grad = rCtx.createRadialGradient(px, py, 0, px, py, radius);
-                        grad.addColorStop(0, color.replace('opacity', opacityMultiplier));
+                        grad.addColorStop(0, color.replace('opacity', opacity));
                         grad.addColorStop(1, color.replace('opacity', '0'));
-                        rCtx.fillStyle = grad;
-                        rCtx.fillRect(0, 0, w, h);
+                        rCtx.fillStyle = grad; rCtx.fillRect(0, 0, w, h);
                     };
 
                     drawPearlPatch(w * 0.4, h * 0.4, 'rgba(210, 180, 255, opacity)', w * 0.8, '0.2'); 
                     drawPearlPatch(w * 0.7, h * 0.3, 'rgba(180, 255, 240, opacity)', w * 0.7, '0.15'); 
                     drawPearlPatch(w * 0.2, h * 0.8, 'rgba(255, 182, 193, opacity)', w * 0.9, '0.22'); 
-                    drawPearlPatch(w * 0.85, h * 0.85, 'rgba(127, 255, 212, opacity)', w * 0.6, '0.12'); 
-                    drawPearlPatch(w * 0.9, h * 0.7, 'rgba(255, 245, 180, opacity)', w * 0.6, '0.1'); 
-                    drawPearlPatch(w * 0.5, h * 0.1, 'rgba(180, 210, 255, opacity)', w * 0.7, '0.15'); 
 
                     rCtx.save();
                     rCtx.globalCompositeOperation = 'screen';
@@ -459,49 +457,70 @@
                             rCtx.beginPath();
                             const ox = Math.sin(ct + i * 0.008) * 60;
                             const oy = Math.cos(ct + j * 0.008) * 60;
-                            rCtx.arc(i + ox, j + oy, 45, 0, Math.PI * 2);
-                            rCtx.stroke();
+                            rCtx.arc(i + ox, j + oy, 45, 0, Math.PI * 2); rCtx.stroke();
                         }
                     }
                     rCtx.restore();
 
                     particlesRef.current.forEach(p => {
                         p.y -= p.v; if(p.y < -10) p.y = h + 10;
-                        rCtx.fillStyle = p.c;
-                        rCtx.beginPath();
+                        rCtx.fillStyle = p.c; rCtx.beginPath();
                         rCtx.arc(p.x + Math.sin(now * 0.0005 + p.x) * 15, p.y, p.s, 0, Math.PI * 2);
                         rCtx.fill();
                     });
 
+                    const isInOverlay = isReadingFullScreen || isReadAllMode;
                     const idleTime = now - mouse.lastMove;
-                    if (idleTime > 2000) {
+                    
+                    if (idleTime > 2000 && !isInOverlay) {
                         let minX = 100, maxX = w - 100, minY = 180, maxY = h - 120; 
-                        if (selectedNote) maxX = w - 320;
-                        if (minX > maxX) { minX = 40; maxX = w - 40; }
+                        if (selectedNote) maxX = w - 420;
                         const roamX = ((minX + maxX) / 2) + Math.sin(now * 0.0002) * (maxX - minX) * 0.35;
                         const roamY = ((minY + maxY) / 2) + Math.sin(now * 0.0004) * (maxY - minY) * 0.3;
                         const dx = (roamX - mouse.x) * 0.02, dy = (roamY - mouse.y) * 0.02;
                         if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) { mouse.angle = Math.atan2(dy, dx); mouse.x += dx; mouse.y += dy; }
                     }
 
-                    let closestId = null, minDistance = Infinity;
+                    const currentTitlePositions = [];
                     anemonesRef.current.forEach(a => {
                         a.update(now, mouse); a.draw(rCtx, selectedNote?.id === a.id, now);
-                        const dx = a.x - mouse.x, dy = a.y - mouse.y, dist = Math.sqrt(dx*dx + dy*dy);
-                        if (dist < 120 * a.scale && dist < minDistance) { minDistance = dist; closestId = a.id; }
                         const el = labelRefs.current[a.id];
                         if (el) {
                             const orbitA = (now * 0.00003 + a.noiseSeed) % (Math.PI * 2);
-                            let lx = a.x + Math.cos(orbitA) * 55 * a.scale, ly = a.y + Math.sin(orbitA) * 55 * a.scale;
+                            let lx = a.x + Math.cos(orbitA) * 55 * a.scale;
+                            let ly = a.y + Math.sin(orbitA) * 55 * a.scale;
                             if (lx < 380 && ly < 180) { ly += 120; lx += 40; }
-                            lx = Math.max(80, Math.min(w - 80, lx)); ly = Math.max(80, Math.min(h - 80, ly));
-                            const isHovered = closestId === a.id;
+                            lx = Math.max(80, Math.min(w - 80, lx));
+                            ly = Math.max(80, Math.min(h - 80, ly));
+
+                            let overlapping = true, nudgeCount = 0;
+                            while (overlapping && nudgeCount < 10) {
+                                overlapping = false;
+                                for (const other of currentTitlePositions) {
+                                    const dx = lx - other.x, dy = ly - other.y;
+                                    const distSq = dx*dx + dy*dy;
+                                    if (distSq < 90 * 90) {
+                                        const dist = Math.sqrt(distSq);
+                                        const angle = dist > 0 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
+                                        lx += Math.cos(angle) * (90 - dist + 2);
+                                        ly += Math.sin(angle) * (90 - dist + 2);
+                                        overlapping = true;
+                                    }
+                                }
+                                nudgeCount++;
+                            }
+                            currentTitlePositions.push({ x: lx, y: ly });
+                            const isHovered = (Math.sqrt((a.x - mouse.x)**2 + (a.y - mouse.y)**2)) < 120 * a.scale;
                             el.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%) scale(${isHovered ? 1.05 : 1})`;
-                            el.style.opacity = (isHovered ? '1' : '0.5') * Math.min(1, (now - a.spawnTime) / 400);
+                            el.style.opacity = (isHovered ? '1' : '0.4') * Math.min(1, (now - a.spawnTime) / 400);
                         }
                     });
 
-                    cCtx.save(); cCtx.translate(mouse.x, mouse.y); cCtx.rotate(mouse.angle);
+                    cCtx.save();
+                    if (isInOverlay && idleTime > 1500) {
+                        cCtx.globalAlpha = Math.max(0, 1 - (idleTime - 1500) / 500);
+                    }
+                    cCtx.translate(mouse.x, mouse.y); cCtx.rotate(mouse.angle);
                     cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); cCtx.fill();
                     cCtx.fillStyle = '#fff'; cCtx.fillRect(-6, -7, 4, 14); cCtx.fillRect(4, -5, 3, 10);
                     cCtx.fillStyle = '#000'; cCtx.beginPath(); cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); cCtx.fill();
@@ -510,18 +529,20 @@
                     cCtx.lineTo(-22, 6 - Math.sin(now * 0.01) * 2); cCtx.fill();
                     cCtx.restore();
 
-                    if (closestId !== hoveredNodeId) setHoveredNodeId(closestId);
                     frameId = requestAnimationFrame(render);
                 };
                 frameId = requestAnimationFrame(render);
                 return () => { cancelAnimationFrame(frameId); window.removeEventListener('resize', handleResize); };
-            }, [notes, selectedNote, isListOpen, lightPalette, hoveredNodeId]);
+            }, [notes, selectedNote, isListOpen, lightPalette, isReadingFullScreen, isReadAllMode]);
 
             const updateMouse = (nx, ny) => {
                 const dx = nx - mouseRef.current.x, dy = ny - mouseRef.current.y;
                 if (Math.abs(dx) > 1 || Math.abs(dy) > 1) { mouseRef.current.angle = Math.atan2(dy, dx); mouseRef.current.lastMove = performance.now(); }
                 mouseRef.current.x = nx; mouseRef.current.y = ny; mouseRef.current.active = true;
             };
+
+            const closeNote = () => { setSelectedNote(null); setIsReadingFullScreen(false); };
+            const openNote = (note) => { setIsReadingFullScreen(false); handleAnemoneSelection(note); };
 
             return (
                 <div 
@@ -530,72 +551,63 @@
                     onTouchStart={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onTouchMove={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onClick={() => {
-                        if (hoveredNodeId) { 
-                            const n = notes.find(n => n.id === hoveredNodeId);
-                            handleAnemoneSelection(n);
-                            setIsAddVisible(false);
-                        } 
-                        else { setIsListOpen(false); setSelectedNote(null); setIsAddVisible(false); }
+                        if (isReadAllMode || isReadingFullScreen) return;
+                        let closestId = null, minDistance = Infinity;
+                        anemonesRef.current.forEach(a => {
+                            const dx = a.x - mouseRef.current.x, dy = a.y - mouseRef.current.y, dist = Math.sqrt(dx*dx + dy*dy);
+                            if (dist < 120 * a.scale && dist < minDistance) { minDistance = dist; closestId = a.id; }
+                        });
+                        if (closestId) { openNote(notes.find(n => n.id === closestId)); setIsAddVisible(false); } 
+                        else { 
+                            // Clicked away: Close drawer and index
+                            setIsListOpen(false); setIsAddVisible(false); closeNote(); 
+                        }
                     }}
                 >
                     <canvas ref={reefCanvasRef} className="absolute inset-0 block pointer-events-none z-0" />
                     <canvas ref={cursorCanvasRef} className="absolute inset-0 block pointer-events-none z-[200]" />
 
-                    {isSyncing && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[50]">
-                            <div className="text-[10px] tracking-[0.5em] opacity-30 font-sans animate-pulse-soft text-teal-900">syncing reef...</div>
-                        </div>
-                    )}
-
-                    <div className="absolute bottom-20 left-6 sm:bottom-8 sm:left-8 z-[120]">
+                    <div className="absolute bottom-28 left-6 sm:bottom-8 sm:left-8 z-[120]">
                         <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsAddVisible(false); }} 
                                 className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-teal-900/10 bg-white/70 backdrop-blur-md text-teal-900/60 hover:text-teal-900 transition-all font-sans text-xs sm:text-[10px] tracking-widest shadow-lg sm:shadow-none">
                             ☰ index
                         </button>
                     </div>
 
-                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-36 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-slate-200 border rounded-sm flex flex-col p-4 shadow-xl backdrop-blur-md`}>
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-32 sm:bottom-12 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-teal-900/10 border rounded-sm flex flex-col p-4 shadow-xl backdrop-blur-md`}>
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
                                 <div className="text-[10px] tracking-[0.3em] opacity-40 font-sans leading-tight">index</div>
-                                <div className={`text-[7px] font-sans mt-1 ${syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
+                                <div className={`text-[7px] font-sans mt-1 ${syncStatus.includes('private key') ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
                             </div>
                             <div className="flex items-center gap-3">
-                                <button onClick={fetchFromReef} disabled={isSyncing} className="text-[9px] tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
-                                <button onClick={() => setIsAddVisible(!isAddVisible)} className="text-[9px] tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">{isAddVisible ? 'close' : 'attach'}</button>
+                                <button onClick={fetchFromReef} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
+                                <button onClick={() => setIsAddVisible(!isAddVisible)} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">{isAddVisible ? 'close' : 'attach'}</button>
                             </div>
                         </div>
 
-                        <div className="flex gap-1 mb-2">
-                            <button onClick={() => setSortMode('newest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'newest' ? 'bg-teal-900 text-white' : 'bg-teal-900/5 text-teal-900/40'}`}>newest</button>
-                            <button onClick={() => setSortMode('oldest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'oldest' ? 'bg-teal-900 text-white' : 'bg-teal-900/5 text-teal-900/40'}`}>oldest</button>
+                        <div className="flex items-center justify-between gap-1 mb-2">
+                            <div className="flex gap-1">
+                                <button onClick={() => setSortMode('newest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'newest' ? 'bg-teal-900 text-white' : 'bg-teal-900/5 text-teal-900/40'}`}>newest</button>
+                                <button onClick={() => setSortMode('oldest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'oldest' ? 'bg-teal-900 text-white' : 'bg-teal-900/5 text-teal-900/40'}`}>oldest</button>
+                            </div>
+                            <button onClick={() => { setIsReadAllMode(true); setIsListOpen(false); }} className="text-[7px] px-2 py-1 rounded-sm bg-teal-700/10 text-teal-900 hover:bg-teal-700 hover:text-white transition-all font-sans">read all</button>
                         </div>
 
-                        <div className="h-[1px] w-full bg-teal-900/10 mb-4 mt-2" />
                         {isAddVisible && (
                             <div className="mb-6 p-4 rounded-sm border border-teal-900/5 bg-teal-900/5 animate-in fade-in zoom-in-95 duration-200">
-                                {syncStatus === 'rate limited' && (
-                                    <div className="mb-4 text-[8px] text-red-500 font-sans leading-tight p-2 bg-red-50 rounded-sm border border-red-100 uppercase font-bold">
-                                        rate limit exceeded. enter access token.
-                                    </div>
-                                )}
                                 <div className="text-[9px] tracking-widest mb-3 opacity-50 font-sans">new anemone</div>
                                 <input type="text" placeholder="title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[12px] mb-3 p-1 font-sans focus:outline-none" />
                                 <textarea placeholder="write here..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-teal-900/10 text-teal-900 rounded-sm text-[11px] mb-3 p-2 font-serif focus:outline-none bg-white/40" />
-                                <div className="flex flex-col gap-2 mt-2">
-                                    <div className="text-[8px] tracking-widest opacity-30 font-sans">access token</div>
-                                    <input type="password" placeholder="ghp_..." value={accessToken} onChange={(e) => setAccessToken(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[11px] mb-2 p-1 font-sans focus:outline-none" />
-                                    <button onClick={attachToPermanent} disabled={isSyncing} className="w-full py-2 rounded-sm text-[10px] font-sans transition-all bg-teal-700/10 hover:bg-teal-700 text-teal-900 hover:text-white border border-teal-700/20">attach permanently</button>
-                                </div>
+                                <input type="password" placeholder="ghp_..." value={accessToken} onChange={(e) => setAccessToken(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[11px] mb-2 p-1 font-sans focus:outline-none" />
+                                <button onClick={attachToPermanent} className="w-full py-2 rounded-sm text-[10px] font-sans transition-all bg-teal-700/10 hover:bg-teal-700 text-teal-900 hover:text-white border border-teal-700/20">attach permanently</button>
                             </div>
                         )}
 
-                        <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar pr-2 flex flex-col gap-1">
-                            {notes.length === 0 && !isSyncing && syncStatus !== 'rate limited' && <div className="text-[11px] opacity-30 italic p-2">sea is empty.</div>}
-                            {notes.length === 0 && !isSyncing && syncStatus === 'rate limited' && <div className="text-[11px] opacity-30 italic p-2 text-red-400">waiting for token...</div>}
+                        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-1">
                             {sortedNotes.map(note => (
-                                <button key={note.id} onClick={() => handleAnemoneSelection(note)} className={`text-left p-2 rounded-sm text-[13px] tracking-wider transition-all font-dyslexic flex justify-between items-center break-words hyphen-auto ${selectedNote?.id === note.id ? 'bg-teal-900/5 text-teal-900 font-bold' : 'text-teal-900/60 hover:bg-teal-900/5'}`}>
-                                    <span className="flex-1 pr-2">{note.title}</span>
+                                <button key={note.id} onClick={() => openNote(note)} className={`text-left p-2 rounded-sm text-[13px] transition-all font-dyslexic ${selectedNote?.id === note.id ? 'bg-teal-900/5 text-teal-900 font-bold' : 'text-teal-900/60 hover:bg-teal-900/5'}`}>
+                                    {note.title}
                                 </button>
                             ))}
                         </div>
@@ -606,28 +618,57 @@
                     ))}
 
                     <div className="absolute top-8 left-8 sm:top-12 sm:left-12 pointer-events-none z-20">
-                        <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-[#2d3748] leading-none font-serif uppercase">REEF</h1>
-                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-0.5 sm:mt-1 opacity-40 font-sans text-[#2d3748]">works by anna emerson</p>
+                        <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-slate-800 leading-none font-serif uppercase">REEF</h1>
+                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-0.5 sm:mt-1 opacity-40 font-sans text-slate-800 uppercase">works by anna emerson</p>
                     </div>
 
-                    <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} bg-white/95 border-teal-900/10 border rounded-sm flex flex-col overflow-hidden shadow-2xl backdrop-blur-md`} >
-                        <div className="flex-1 p-8 flex flex-col relative overflow-hidden">
-                            <div className="absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-multiply bg-[url('https://www.transparenttextures.com/patterns/felt.png')]" />
-                            <button onClick={() => setSelectedNote(null)} className="self-end mb-4 text-[10px] uppercase tracking-widest transition-all px-2 py-1 rounded-sm text-teal-900/40 hover:text-teal-900 font-sans">close ✕</button>
-                            
-                            <div className="mb-4">
-                                <h2 className="text-2xl font-serif font-normal leading-tight text-teal-950 break-words hyphen-auto">{selectedNote?.title}</h2>
-                                <div className="h-[1px] w-full mt-2 bg-teal-900/5" />
+                    {/* INDIVIDUAL READING PANEL */}
+                    <div 
+                        onClick={(e) => e.stopPropagation()} 
+                        className={`absolute z-[150] 
+                            ${selectedNote ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8 pointer-events-none'}
+                            ${isReadingFullScreen 
+                                ? 'inset-0 bg-white/70 backdrop-blur-3xl no-morph' 
+                                : 'right-4 top-4 bottom-4 w-[380px] bg-white/95 border-teal-900/10 border rounded-sm shadow-2xl backdrop-blur-md transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)]'
+                            }`}
+                    >
+                        <div className={`h-full flex flex-col relative overflow-hidden transition-all duration-500 ${isReadingFullScreen ? 'max-w-xl mx-auto' : ''}`}>
+                            <div className="absolute inset-0 opacity-[0.02] pointer-events-none mix-blend-multiply bg-[url('https://www.transparenttextures.com/patterns/felt.png')]" />
+                            <div className={`flex justify-between items-center p-6 sm:p-8 flex-shrink-0 z-10`}>
+                                <div className="flex items-center gap-4">
+                                    <button onClick={closeNote} className="text-[10px] uppercase tracking-widest px-2 py-1 rounded-sm text-slate-400 hover:text-slate-900 font-sans">close ✕</button>
+                                    <button onClick={() => setIsReadingFullScreen(!isReadingFullScreen)} className="text-[10px] uppercase tracking-widest px-2 py-1 rounded-sm text-slate-400 hover:text-slate-900 font-sans hidden sm:block">{isReadingFullScreen ? 'shrink ↘' : 'expand ↖'}</button>
+                                </div>
+                                <div className={`text-slate-300 text-[8px] uppercase tracking-[0.3em] font-sans`}>{selectedNote?.date || "..." }</div>
                             </div>
 
-                            <div className="flex-1 overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar text-teal-950/80 font-serif hyphen-auto">
-                                {selectedNote && <div className="prose prose-sm leading-relaxed break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
+                            <div className={`flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar px-8 pb-24 sm:px-12`}>
+                                <div className="mb-8 text-center">
+                                    <h2 className="text-xl sm:text-2xl font-serif text-slate-950 leading-tight transition-all duration-500">{selectedNote?.title}</h2>
+                                    <div className="h-[1px] w-8 mx-auto mt-6 bg-slate-900/10" />
+                                </div>
+                                <div className={`text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none transition-all duration-500`}>
+                                    {selectedNote && <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
+                                </div>
                             </div>
-                            
-                            <div className={`mt-8 pt-6 border-t border-teal-900/5 text-teal-900/30 text-[8px] uppercase tracking-[0.3em] font-sans flex justify-between flex-shrink-0`}>
-                                <span>{selectedNote?.date ? `date: ${selectedNote.date}` : "date: ..."}</span>
-                                <span>permanent sea</span>
+                        </div>
+                    </div>
+
+                    {/* READ ALL OVERLAY */}
+                    <div className={`absolute inset-0 z-[160] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] bg-white/75 backdrop-blur-3xl overflow-y-auto custom-scrollbar ${isReadAllMode ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-full pointer-events-none'}`}>
+                        <div className="max-w-xl mx-auto py-24 px-8 relative">
+                            <button onClick={() => setIsReadAllMode(false)} className="fixed top-8 right-8 z-[170] text-[10px] uppercase tracking-widest px-4 py-2 rounded-full bg-white/50 border border-slate-200 text-slate-500 hover:text-slate-900 font-sans backdrop-blur-md">close all ✕</button>
+                            <div className="flex flex-col gap-24">
+                                {sortedNotes.map(note => (
+                                    <div key={note.id} className="relative">
+                                        <div className="mb-6 opacity-40 text-[9px] tracking-widest uppercase font-sans border-b border-slate-100 pb-2 text-center">{note.date || "..."}</div>
+                                        <h2 className="text-xl sm:text-2xl font-serif text-slate-950 mb-6 text-center leading-tight">{note.title}</h2>
+                                        <div className="text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none" dangerouslySetInnerHTML={{ __html: renderMarkdown(note.content) }} />
+                                        <div className="mt-16 flex justify-center opacity-5"><div className="h-[1px] w-32 bg-slate-900" /></div>
+                                    </div>
+                                ))}
                             </div>
+                            <div className="py-24 text-center text-[10px] tracking-[0.5em] uppercase opacity-20 font-sans">end of reef</div>
                         </div>
                     </div>
                 </div>
