@@ -27,7 +27,6 @@
             background: rgba(0,0,0,0.1); 
             border-radius: 10px; 
         }
-        /* Hardware acceleration hint */
         canvas { 
             backface-visibility: hidden;
             transform: translateZ(0);
@@ -102,9 +101,8 @@
                 const dx = this.x - mouse.x;
                 const dy = this.y - mouse.y;
                 const distToMouse = Math.sqrt(dx*dx + dy*dy);
-                const hovered = distToMouse < (120 * this.scale);
                 
-                // Adaptive Performance: Skip complex interaction if mouse is far
+                // Active interaction range
                 const isNear = distToMouse < 250;
 
                 this.tentacles.forEach(t => {
@@ -133,7 +131,6 @@
                         lastX = seg.targetX; lastY = seg.targetY;
                     });
                 });
-                return hovered;
             }
 
             draw(ctx, isSelected, now) {
@@ -143,7 +140,6 @@
                 ctx.save();
                 ctx.globalAlpha = fadeInAlpha;
                 
-                // Optimized Glow: Gradient is faster than shadowBlur
                 const coreSize = 45 * this.scale;
                 const coreGrad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, coreSize);
                 coreGrad.addColorStop(0, this.color);
@@ -160,7 +156,6 @@
                 ctx.strokeStyle = this.color;
                 ctx.globalAlpha = (isSelected ? 1.0 : 0.6) * fadeInAlpha;
 
-                // Batch path drawing for all tentacles of this anemone
                 ctx.beginPath();
                 this.tentacles.forEach(t => {
                     ctx.moveTo(this.x, this.y);
@@ -168,7 +163,6 @@
                 });
                 ctx.stroke();
 
-                // Draw Tips
                 ctx.fillStyle = 'rgba(255,255,255,0.7)';
                 ctx.beginPath();
                 this.tentacles.forEach(t => {
@@ -316,13 +310,12 @@
                 const rCanvas = reefCanvasRef.current;
                 const cCanvas = cursorCanvasRef.current;
                 if (!rCanvas || !cCanvas) return;
-                const rCtx = rCanvas.getContext('2d', { alpha: false }); // Opt-in to faster opaque canvas
+                const rCtx = rCanvas.getContext('2d', { alpha: false });
                 const cCtx = cCanvas.getContext('2d');
                 let frameId;
 
                 const handleResize = () => {
                     const dpr = window.devicePixelRatio || 1;
-                    // Cap DPR at 2.0 to prevent 4K/8K mobile screens from tanking GPU
                     const cappedDPR = Math.min(dpr, 2);
                     [rCanvas, cCanvas].forEach(c => {
                         c.width = window.innerWidth * cappedDPR;
@@ -344,11 +337,9 @@
                     cCtx.setTransform(cappedDPR, 0, 0, cappedDPR, 0, 0);
                     cCtx.clearRect(0, 0, w, h);
 
-                    // Optimized background fill
                     rCtx.fillStyle = '#FDFBF0';
                     rCtx.fillRect(0, 0, w, h);
 
-                    // Sunlight Gradient Layer
                     const grad = rCtx.createLinearGradient(0, 0, w, h);
                     grad.addColorStop(0, 'rgba(253, 251, 240, 1)');
                     grad.addColorStop(0.3, 'rgba(222, 239, 233, 0.8)');
@@ -356,13 +347,11 @@
                     rCtx.fillStyle = grad;
                     rCtx.fillRect(0, 0, w, h);
 
-                    // Fast Caustics
                     rCtx.save();
                     rCtx.globalCompositeOperation = 'overlay';
                     rCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; 
                     rCtx.lineWidth = 1;
                     const ct = now * 0.0002;
-                    // Wider step (180 instead of 140) reduces loop count by 40%
                     for (let i = -180; i < w + 180; i += 180) {
                         for (let j = -180; j < h + 180; j += 180) {
                             rCtx.beginPath();
@@ -374,7 +363,6 @@
                     }
                     rCtx.restore();
 
-                    // Idle Fish Logic
                     const idleTime = now - mouse.lastMove;
                     if (idleTime > 2000) {
                         const roamX = w/2 + Math.sin(now * 0.0002) * (w * 0.1);
@@ -388,7 +376,6 @@
                         }
                     }
 
-                    // Handle Anemone Population
                     const existingIds = anemonesRef.current.map(a => a.id).join(',');
                     const currentIds = notes.map(n => n.id).join(',');
 
@@ -416,11 +403,25 @@
                         anemonesRef.current = newAnemones;
                     }
 
-                    let currentHover = null;
+                    // Selection Tracking Logic
+                    let closestId = null;
+                    let minDistance = Infinity;
+
                     anemonesRef.current.forEach(a => {
-                        const hvr = a.update(now, mouse);
-                        if (hvr) currentHover = a.id;
+                        a.update(now, mouse);
                         a.draw(rCtx, selectedNote?.id === a.id, now);
+                        
+                        // Selection Logic: Find the truly closest anemone to the fish within radius
+                        const dx = a.x - mouse.x;
+                        const dy = a.y - mouse.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        const radius = 120 * a.scale;
+                        
+                        if (dist < radius && dist < minDistance) {
+                            minDistance = dist;
+                            closestId = a.id;
+                        }
+
                         const el = labelRefs.current[a.id];
                         if (el) {
                             const orbitR = 105 * a.scale;
@@ -433,8 +434,11 @@
                             lx = Math.max(margin, Math.min(w - margin, lx));
                             ly = Math.max(margin, Math.min(h - margin, ly));
                             const fadeAlpha = Math.min(1, (now - a.spawnTime) / 400);
-                            el.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%) scale(${hvr ? 1.05 : 1})`;
-                            el.style.opacity = (hvr ? '1' : '0.5') * fadeAlpha;
+                            
+                            // Visual feedback for "hover"
+                            const isHovered = closestId === a.id;
+                            el.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%) scale(${isHovered ? 1.05 : 1})`;
+                            el.style.opacity = (isHovered ? '1' : '0.5') * fadeAlpha;
                         }
                     });
 
@@ -461,7 +465,7 @@
                     cCtx.fill();
                     cCtx.restore();
 
-                    if (currentHover !== hoveredNodeId) setHoveredNodeId(currentHover);
+                    if (closestId !== hoveredNodeId) setHoveredNodeId(closestId);
                     frameId = requestAnimationFrame(render);
                 };
                 frameId = requestAnimationFrame(render);
@@ -484,6 +488,7 @@
                 <div 
                     className="relative w-full h-screen overflow-hidden select-none cursor-none bg-[#FDFBF0]"
                     onMouseMove={(e) => updateMouse(e.clientX, e.clientY)}
+                    onTouchStart={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onTouchMove={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onClick={() => {
                         if (hoveredNodeId) { 
@@ -498,14 +503,15 @@
                     <canvas ref={reefCanvasRef} className="absolute inset-0 block pointer-events-none z-0" />
                     <canvas ref={cursorCanvasRef} className="absolute inset-0 block pointer-events-none z-[200]" />
 
-                    <div className="absolute bottom-10 left-6 sm:bottom-8 sm:left-8 z-[120]">
+                    {/* MOVED HIGHER FOR MOBILE: bottom-20 */}
+                    <div className="absolute bottom-20 left-6 sm:bottom-8 sm:left-8 z-[120]">
                         <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsAddVisible(false); }} 
                                 className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md text-black/60 hover:text-black transition-all font-sans text-xs sm:text-[10px] uppercase tracking-widest shadow-lg sm:shadow-none">
                             ☰ Reef Index
                         </button>
                     </div>
 
-                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-24 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-slate-200 border rounded-sm flex flex-col p-4 shadow-xl backdrop-blur-md`}>
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-36 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-slate-200 border rounded-sm flex flex-col p-4 shadow-xl backdrop-blur-md`}>
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
                                 <div className="text-[10px] uppercase tracking-[0.3em] opacity-40 font-sans leading-tight">Index</div>
