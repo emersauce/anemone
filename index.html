@@ -356,13 +356,35 @@
                     const existingIds = anemonesRef.current.map(a => a.id).join(',');
                     const currentIds = notes.map(n => n.id).join(',');
 
+                    // --- Anemone Spacing & Placement Logic ---
                     if (notes.length > 0 && existingIds !== currentIds) {
                         const p = dark ? palettes.dark : palettes.light;
-                        anemonesRef.current = notes.map((n, i) => {
-                            const nx = (0.12 + Math.random() * 0.76) * w;
-                            const ny = (0.2 + Math.random() * 0.6) * h;
-                            return new AnemoneNode(n.id, nx, ny, p[i % p.length], i % p.length);
+                        const newAnemones = [];
+                        const minSpacing = 240; // Avoid overlapping centers
+                        const maxAttempts = 50;
+
+                        notes.forEach((n, i) => {
+                            let nx, ny, attempts = 0;
+                            let spotFound = false;
+
+                            while (attempts < maxAttempts && !spotFound) {
+                                nx = (0.12 + Math.random() * 0.76) * w;
+                                ny = (0.2 + Math.random() * 0.6) * h;
+                                spotFound = true;
+
+                                // Check against previously placed anemones
+                                for (let other of newAnemones) {
+                                    const dist = Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2);
+                                    if (dist < minSpacing) {
+                                        spotFound = false;
+                                        break;
+                                    }
+                                }
+                                attempts++;
+                            }
+                            newAnemones.push(new AnemoneNode(n.id, nx, ny, p[i % p.length], i % p.length));
                         });
+                        anemonesRef.current = newAnemones;
                     }
 
                     let currentHover = null;
