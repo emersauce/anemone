@@ -19,13 +19,18 @@
             margin: 0; 
             overflow: hidden; 
             background-color: #FDFBF0; 
-            touch-action: none; /* Prevents scrolling while dragging the fish */
+            touch-action: none; 
         }
         .font-dyslexic { font-family: 'OpenDyslexic', sans-serif !important; }
         .custom-scrollbar::-webkit-scrollbar { width: 3px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { 
             background: rgba(0,0,0,0.1); 
             border-radius: 10px; 
+        }
+        /* Hardware acceleration hint */
+        canvas { 
+            backface-visibility: hidden;
+            transform: translateZ(0);
         }
     </style>
 </head>
@@ -35,7 +40,6 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
-        // --- GITHUB API CONFIGURATION ---
         const GITHUB_CONFIG = {
             owner: 'emersauce',
             repo: 'anemone',
@@ -54,7 +58,6 @@
                 .replace(/\n/gim, '<br />');
         };
 
-        // --- Physics Classes ---
         class TentacleSegment {
             constructor(x, y, len, angle) {
                 this.x = x; this.y = y;
@@ -77,11 +80,11 @@
                 this.tentacles = [];
                 this.spawnTime = performance.now();
                 
-                const count = Math.floor((22 + Math.random() * 12) * Math.sqrt(this.scale));
+                const count = Math.floor((20 + Math.random() * 10) * Math.sqrt(this.scale));
                 for (let i = 0; i < count; i++) {
                     const angle = (Math.PI * 2 / count) * i;
                     const segments = [];
-                    const segCount = 6 + Math.floor(Math.random() * 5);
+                    const segCount = 5 + Math.floor(Math.random() * 4);
                     const segLen = (8 + Math.random() * 6) * this.scale;
                     for (let j = 0; j < segCount; j++) {
                         segments.push(new TentacleSegment(x, y, segLen, angle));
@@ -98,7 +101,11 @@
 
                 const dx = this.x - mouse.x;
                 const dy = this.y - mouse.y;
-                const hovered = Math.sqrt(dx*dx + dy*dy) < (120 * this.scale);
+                const distToMouse = Math.sqrt(dx*dx + dy*dy);
+                const hovered = distToMouse < (120 * this.scale);
+                
+                // Adaptive Performance: Skip complex interaction if mouse is far
+                const isNear = distToMouse < 250;
 
                 this.tentacles.forEach(t => {
                     let lastX = this.x;
@@ -106,8 +113,13 @@
                     t.segments.forEach((seg, i) => {
                         const swirl = Math.sin(time * 0.00015 + this.x * 0.01) * 0.06;
                         const wave = Math.sin(time * 0.0003 + i * 0.3 + t.baseAngle) * 0.04;
-                        let mdx = seg.x - mouse.x, mdy = seg.y - mouse.y, dist = Math.sqrt(mdx*mdx + mdy*mdy);
-                        let avoidAngle = (dist < 160 && dist > 5) ? Math.atan2(mdy, mdx) * ((180 - dist) * 0.0012) : 0;
+                        
+                        let avoidAngle = 0;
+                        if (isNear) {
+                            let mdx = seg.x - mouse.x, mdy = seg.y - mouse.y;
+                            let dist = Math.sqrt(mdx*mdx + mdy*mdy);
+                            avoidAngle = (dist < 160 && dist > 5) ? Math.atan2(mdy, mdx) * ((180 - dist) * 0.0012) : 0;
+                        }
 
                         const targetAngle = t.baseAngle + swirl + wave + avoidAngle;
                         let diff = targetAngle - seg.currentAngle;
@@ -126,36 +138,45 @@
 
             draw(ctx, isSelected, now) {
                 const age = now - this.spawnTime;
-                const fadeInAlpha = Math.min(1, age / 250); 
+                const fadeInAlpha = Math.min(1, age / 400); 
 
                 ctx.save();
                 ctx.globalAlpha = fadeInAlpha;
                 
-                const coreSize = 40 * this.scale;
+                // Optimized Glow: Gradient is faster than shadowBlur
+                const coreSize = 45 * this.scale;
                 const coreGrad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, coreSize);
                 coreGrad.addColorStop(0, this.color);
                 coreGrad.addColorStop(1, 'transparent');
                 ctx.fillStyle = coreGrad;
-                ctx.globalAlpha = (isSelected ? 0.4 : 0.2) * fadeInAlpha;
-                ctx.beginPath(); ctx.arc(this.x, this.y, coreSize, 0, Math.PI * 2); ctx.fill();
+                ctx.globalAlpha = (isSelected ? 0.35 : 0.15) * fadeInAlpha;
+                ctx.beginPath(); 
+                ctx.arc(this.x, this.y, coreSize, 0, Math.PI * 2); 
+                ctx.fill();
 
+                ctx.lineCap = 'round'; 
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 6 * this.scale;
+                ctx.strokeStyle = this.color;
+                ctx.globalAlpha = (isSelected ? 1.0 : 0.6) * fadeInAlpha;
+
+                // Batch path drawing for all tentacles of this anemone
+                ctx.beginPath();
                 this.tentacles.forEach(t => {
-                    ctx.beginPath();
                     ctx.moveTo(this.x, this.y);
                     t.segments.forEach(seg => ctx.lineTo(seg.targetX, seg.targetY));
-                    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-                    ctx.lineWidth = 7 * this.scale;
-                    ctx.strokeStyle = this.color;
-                    ctx.shadowBlur = 0;
-                    ctx.globalAlpha = (isSelected ? 1.0 : 0.6) * fadeInAlpha;
-                    ctx.stroke();
-
-                    const tip = t.segments[t.segments.length - 1];
-                    ctx.beginPath();
-                    ctx.arc(tip.targetX, tip.targetY, 2.2 * this.scale, 0, Math.PI * 2);
-                    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-                    ctx.fill();
                 });
+                ctx.stroke();
+
+                // Draw Tips
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.beginPath();
+                this.tentacles.forEach(t => {
+                    const tip = t.segments[t.segments.length - 1];
+                    ctx.moveTo(tip.targetX, tip.targetY);
+                    ctx.arc(tip.targetX, tip.targetY, 2 * this.scale, 0, Math.PI * 2);
+                });
+                ctx.fill();
                 ctx.restore();
             }
         }
@@ -175,19 +196,15 @@
             const [newNoteTitle, setNewNoteTitle] = useState("");
             const [newNoteContent, setNewNoteContent] = useState("");
             const [githubToken, setGithubToken] = useState("");
-            
-            const [isSyncing, setIsSyncing] = useState(false);
             const [syncStatus, setSyncStatus] = useState('Standby');
+            const [isSyncing, setIsSyncing] = useState(false);
 
-            // --- Enhanced Cursor State ---
             const mouseRef = useRef({ 
                 x: window.innerWidth / 2, 
                 y: window.innerHeight / 2, 
                 angle: 0, 
                 active: false,
-                lastMove: performance.now(),
-                targetX: window.innerWidth / 2,
-                targetY: window.innerHeight / 2
+                lastMove: performance.now()
             });
             const anemonesRef = useRef([]);
 
@@ -218,10 +235,6 @@
 
             const fetchFromGithub = async () => {
                 const { owner, repo, path, branch } = GITHUB_CONFIG;
-                if (!owner || owner === 'your-username') {
-                    setSyncStatus('Config Required');
-                    return;
-                }
                 setIsSyncing(true);
                 setSyncStatus('Scanning...');
                 try {
@@ -245,13 +258,12 @@
                                     charCount: text.length 
                                 });
                             }
-                        } catch (e) { console.warn(`Failed to fetch ${file.name}`); }
+                        } catch (e) {}
                     }
                     setNotes(fetchedNotes);
                     setSyncStatus(fetchedNotes.length > 0 ? 'Active' : 'Empty Reef');
                 } catch (err) {
                     setSyncStatus('Offline');
-                    console.error("Fetch error:", err);
                 } finally { setIsSyncing(false); }
             };
 
@@ -290,30 +302,31 @@
                     setNewNoteTitle(""); setNewNoteContent(""); setIsAddVisible(false);
                     setTimeout(fetchFromGithub, 1500);
                 } catch (err) { 
-                    setSyncStatus(err.message.substring(0, 30)); 
+                    setSyncStatus(err.message.substring(0, 20)); 
                 } finally { 
                     setIsSyncing(false); 
                 }
             };
 
             useEffect(() => { 
-                const timer = setTimeout(fetchFromGithub, 500);
-                return () => clearTimeout(timer);
+                fetchFromGithub();
             }, []);
 
             useEffect(() => {
                 const rCanvas = reefCanvasRef.current;
                 const cCanvas = cursorCanvasRef.current;
                 if (!rCanvas || !cCanvas) return;
-                const rCtx = rCanvas.getContext('2d');
+                const rCtx = rCanvas.getContext('2d', { alpha: false }); // Opt-in to faster opaque canvas
                 const cCtx = cCanvas.getContext('2d');
                 let frameId;
 
                 const handleResize = () => {
                     const dpr = window.devicePixelRatio || 1;
+                    // Cap DPR at 2.0 to prevent 4K/8K mobile screens from tanking GPU
+                    const cappedDPR = Math.min(dpr, 2);
                     [rCanvas, cCanvas].forEach(c => {
-                        c.width = window.innerWidth * dpr;
-                        c.height = window.innerHeight * dpr;
+                        c.width = window.innerWidth * cappedDPR;
+                        c.height = window.innerHeight * cappedDPR;
                         c.style.width = `${window.innerWidth}px`;
                         c.style.height = `${window.innerHeight}px`;
                     });
@@ -322,49 +335,52 @@
                 handleResize();
 
                 const render = (now) => {
-                    const dpr = window.devicePixelRatio || 1;
+                    const cappedDPR = Math.min(window.devicePixelRatio || 1, 2);
                     const w = window.innerWidth;
                     const h = window.innerHeight;
                     const mouse = mouseRef.current;
 
-                    rCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                    cCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    rCtx.setTransform(cappedDPR, 0, 0, cappedDPR, 0, 0);
+                    cCtx.setTransform(cappedDPR, 0, 0, cappedDPR, 0, 0);
                     cCtx.clearRect(0, 0, w, h);
 
-                    // Background Gradient
+                    // Optimized background fill
+                    rCtx.fillStyle = '#FDFBF0';
+                    rCtx.fillRect(0, 0, w, h);
+
+                    // Sunlight Gradient Layer
                     const grad = rCtx.createLinearGradient(0, 0, w, h);
-                    grad.addColorStop(0, '#FDFBF0');
-                    grad.addColorStop(0.3, '#DEEFE9');
-                    grad.addColorStop(0.6, '#E0EBF7');
-                    grad.addColorStop(1, '#EDE5D5');
+                    grad.addColorStop(0, 'rgba(253, 251, 240, 1)');
+                    grad.addColorStop(0.3, 'rgba(222, 239, 233, 0.8)');
+                    grad.addColorStop(1, 'rgba(237, 229, 213, 1)');
                     rCtx.fillStyle = grad;
                     rCtx.fillRect(0, 0, w, h);
 
-                    // Water Caustics
+                    // Fast Caustics
                     rCtx.save();
                     rCtx.globalCompositeOperation = 'overlay';
-                    rCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; rCtx.lineWidth = 1;
-                    const ct = now * 0.0003;
-                    for (let i = -140; i < w + 140; i += 140) {
-                        for (let j = -140; j < h + 140; j += 140) {
+                    rCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; 
+                    rCtx.lineWidth = 1;
+                    const ct = now * 0.0002;
+                    // Wider step (180 instead of 140) reduces loop count by 40%
+                    for (let i = -180; i < w + 180; i += 180) {
+                        for (let j = -180; j < h + 180; j += 180) {
                             rCtx.beginPath();
-                            const ox = Math.sin(ct + i * 0.01) * 20; const oy = Math.cos(ct + j * 0.01) * 20;
-                            rCtx.arc(i + ox, j + oy, 52, 0, Math.PI * 2); rCtx.stroke();
+                            const ox = Math.sin(ct + i * 0.01) * 25; 
+                            const oy = Math.cos(ct + j * 0.01) * 25;
+                            rCtx.arc(i + ox, j + oy, 65, 0, Math.PI * 2); 
+                            rCtx.stroke();
                         }
                     }
                     rCtx.restore();
 
-                    // --- IDLE FISH ANIMATION: SLOW & SHORT ---
+                    // Idle Fish Logic
                     const idleTime = now - mouse.lastMove;
                     if (idleTime > 2000) {
-                        // Much slower roam (0.0002) and smaller radius (w * 0.1)
                         const roamX = w/2 + Math.sin(now * 0.0002) * (w * 0.1);
                         const roamY = h/2 + Math.sin(now * 0.0004) * (h * 0.08);
-                        
-                        // Gentle drifty easing (0.02)
                         const dx = (roamX - mouse.x) * 0.02;
                         const dy = (roamY - mouse.y) * 0.02;
-                        
                         if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) {
                             mouse.angle = Math.atan2(dy, dx);
                             mouse.x += dx;
@@ -372,7 +388,7 @@
                         }
                     }
 
-                    // Physics Updates
+                    // Handle Anemone Population
                     const existingIds = anemonesRef.current.map(a => a.id).join(',');
                     const currentIds = notes.map(n => n.id).join(',');
 
@@ -381,17 +397,16 @@
                         const maxLen = Math.max(...lengths);
                         const minLen = Math.min(...lengths);
                         const newAnemones = [];
-                        const minSpacing = 120; 
                         notes.forEach((n, i) => {
                             let relativeScale = 0.5 + ((n.charCount - minLen) / (maxLen - minLen || 1)) * 0.5;
                             let nx, ny, attempts = 0;
                             let spotFound = false;
-                            while (attempts < 100 && !spotFound) {
+                            while (attempts < 50 && !spotFound) {
                                 nx = (0.12 + Math.random() * 0.76) * w;
                                 ny = (0.2 + Math.random() * 0.6) * h;
                                 spotFound = true;
                                 for (let other of newAnemones) {
-                                    const combinedMinDist = (minSpacing * relativeScale) + (minSpacing * other.scale);
+                                    const combinedMinDist = (110 * relativeScale) + (110 * other.scale);
                                     if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < combinedMinDist) { spotFound = false; break; }
                                 }
                                 attempts++;
@@ -417,11 +432,9 @@
                             const margin = 80;
                             lx = Math.max(margin, Math.min(w - margin, lx));
                             ly = Math.max(margin, Math.min(h - margin, ly));
-                            const age = now - a.spawnTime;
-                            const fadeAlpha = Math.min(1, age / 250);
+                            const fadeAlpha = Math.min(1, (now - a.spawnTime) / 400);
                             el.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%) scale(${hvr ? 1.05 : 1})`;
-                            el.style.opacity = (hvr ? '1' : '0.6') * fadeAlpha;
-                            el.style.color = '#4a5568';
+                            el.style.opacity = (hvr ? '1' : '0.5') * fadeAlpha;
                         }
                     });
 
@@ -429,10 +442,20 @@
                     cCtx.save();
                     cCtx.translate(mouse.x, mouse.y);
                     cCtx.rotate(mouse.angle);
-                    cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); cCtx.fill();
-                    cCtx.fillStyle = '#fff'; cCtx.fillRect(-6, -7, 4, 14); cCtx.fillRect(4, -5, 3, 10);
-                    cCtx.fillStyle = '#000'; cCtx.beginPath(); cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); cCtx.fill();
-                    cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.moveTo(-14, 0);
+                    cCtx.fillStyle = '#ff8c00'; 
+                    cCtx.beginPath(); 
+                    cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); 
+                    cCtx.fill();
+                    cCtx.fillStyle = '#fff'; 
+                    cCtx.fillRect(-6, -7, 4, 14); 
+                    cCtx.fillRect(4, -5, 3, 10);
+                    cCtx.fillStyle = '#000'; 
+                    cCtx.beginPath(); 
+                    cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); 
+                    cCtx.fill();
+                    cCtx.fillStyle = '#ff8c00'; 
+                    cCtx.beginPath(); 
+                    cCtx.moveTo(-14, 0);
                     cCtx.lineTo(-22, -6 + Math.sin(now * 0.01) * 2);
                     cCtx.lineTo(-22, 6 - Math.sin(now * 0.01) * 2);
                     cCtx.fill();
@@ -457,28 +480,11 @@
                 mouseRef.current.active = true;
             };
 
-            const handleMouseMove = (e) => updateMouse(e.clientX, e.clientY);
-            
-            const handleTouch = (e) => {
-                const touch = e.touches[0];
-                updateMouse(touch.clientX, touch.clientY);
-            };
-
-            const SortButton = ({ mode, label }) => (
-                <button 
-                    onClick={() => setSortMode(mode)}
-                    className={`text-[7px] uppercase tracking-widest px-2 py-1 rounded-sm transition-all ${sortMode === mode ? 'bg-black text-white' : 'bg-black/5 text-black/40 hover:text-black'}`}
-                >
-                    {label}
-                </button>
-            );
-
             return (
                 <div 
-                    className="relative w-full h-screen transition-colors duration-[1500ms] overflow-hidden select-none cursor-none bg-[#FDFBF0]"
-                    onMouseMove={handleMouseMove}
-                    onTouchStart={handleTouch}
-                    onTouchMove={handleTouch}
+                    className="relative w-full h-screen overflow-hidden select-none cursor-none bg-[#FDFBF0]"
+                    onMouseMove={(e) => updateMouse(e.clientX, e.clientY)}
+                    onTouchMove={(e) => updateMouse(e.touches[0].clientX, e.touches[0].clientY)}
                     onClick={() => {
                         if (hoveredNodeId) { 
                             setSelectedNote(notes.find(n => n.id === hoveredNodeId)); 
@@ -492,22 +498,21 @@
                     <canvas ref={reefCanvasRef} className="absolute inset-0 block pointer-events-none z-0" />
                     <canvas ref={cursorCanvasRef} className="absolute inset-0 block pointer-events-none z-[200]" />
 
-                    {/* MOBILE FRIENDLY INDEX BUTTON */}
                     <div className="absolute bottom-10 left-6 sm:bottom-8 sm:left-8 z-[120]">
                         <button onClick={(e) => { e.stopPropagation(); setIsListOpen(!isListOpen); setIsAddVisible(false); }} 
-                                className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-black/20 bg-white/80 backdrop-blur-sm text-black/60 hover:text-black transition-all duration-500 font-sans text-xs sm:text-[10px] uppercase tracking-widest shadow-lg sm:shadow-none">
+                                className="px-5 py-3 sm:px-6 sm:py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md text-black/60 hover:text-black transition-all font-sans text-xs sm:text-[10px] uppercase tracking-widest shadow-lg sm:shadow-none">
                             ☰ Reef Index
                         </button>
                     </div>
 
-                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-24 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-slate-200 border rounded-sm flex flex-col p-4 shadow-xl`}>
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-24 left-8 z-[130] w-[260px] max-h-[500px] overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${isListOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'} bg-white/95 border-slate-200 border rounded-sm flex flex-col p-4 shadow-xl backdrop-blur-md`}>
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
                                 <div className="text-[10px] uppercase tracking-[0.3em] opacity-40 font-sans leading-tight">Index</div>
-                                <div className="text-[7px] uppercase tracking-[0.1em] opacity-25 font-sans mt-1 overflow-hidden whitespace-nowrap text-ellipsis">Status: {syncStatus}</div>
+                                <div className="text-[7px] uppercase tracking-[0.1em] opacity-25 font-sans mt-1">Status: {syncStatus}</div>
                                 <div className="flex gap-1 mt-2">
-                                    <SortButton mode="newest" label="Newest" />
-                                    <SortButton mode="oldest" label="Oldest" />
+                                    <button onClick={() => setSortMode('newest')} className={`text-[7px] uppercase px-2 py-1 rounded-sm ${sortMode === 'newest' ? 'bg-black text-white' : 'bg-black/5 text-black/40'}`}>Newest</button>
+                                    <button onClick={() => setSortMode('oldest')} className={`text-[7px] uppercase px-2 py-1 rounded-sm ${sortMode === 'oldest' ? 'bg-black text-white' : 'bg-black/5 text-black/40'}`}>Oldest</button>
                                 </div>
                             </div>
                             <button onClick={() => setIsAddVisible(!isAddVisible)} className="text-[9px] uppercase tracking-wider opacity-60 hover:opacity-100 font-sans underline underline-offset-4">{isAddVisible ? 'Close' : 'Plant'}</button>
@@ -516,7 +521,7 @@
                         <div className="h-[1px] w-full bg-slate-100 mb-4 mt-2" />
 
                         {isAddVisible && (
-                            <div className="mb-6 p-4 rounded-sm border border-black/5 bg-black/5">
+                            <div className="mb-6 p-4 rounded-sm border border-black/5 bg-black/5 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="text-[9px] uppercase tracking-widest mb-3 opacity-50 font-sans">New Drift</div>
                                 <input type="text" placeholder="Title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-black/20 text-black text-[12px] mb-3 p-1 font-sans focus:outline-none" />
                                 <textarea placeholder="Markdown content..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-black/10 text-black rounded-sm text-[11px] mb-3 p-2 font-serif focus:outline-none bg-white/40" />
@@ -529,21 +534,21 @@
                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-1">
                             {sortedNotes.length === 0 && !isSyncing && <div className="text-[11px] opacity-30 italic p-2">Sea is empty.</div>}
                             {sortedNotes.map(note => (
-                                <button key={note.id} onClick={() => { setSelectedNote(note); }} className={`text-left p-2 rounded-sm text-[13px] lowercase tracking-wider transition-all duration-300 font-dyslexic ${selectedNote?.id === note.id ? 'bg-black/5 text-slate-900 font-bold' : 'text-slate-600 hover:bg-black/5 hover:text-slate-900'}`}>{note.title}</button>
+                                <button key={note.id} onClick={() => setSelectedNote(note)} className={`text-left p-2 rounded-sm text-[13px] lowercase tracking-wider transition-all font-dyslexic ${selectedNote?.id === note.id ? 'bg-black/5 text-slate-900 font-bold' : 'text-slate-600 hover:bg-black/5'}`}>{note.title}</button>
                             ))}
                         </div>
                     </div>
 
                     {!selectedNote && !isListOpen && notes.map(n => (
-                        <div key={n.id} ref={el => labelRefs.current[n.id] = el} className="absolute left-0 top-0 text-[14px] leading-tight lowercase tracking-[0.05em] font-dyslexic pointer-events-none transition-opacity duration-500 will-change-transform z-10" style={{ opacity: 0 }}>{n.title?.toLowerCase()}</div>
+                        <div key={n.id} ref={el => labelRefs.current[n.id] = el} className="absolute left-0 top-0 text-[14px] leading-tight lowercase tracking-[0.05em] font-dyslexic pointer-events-none transition-opacity duration-300 will-change-transform z-10 text-slate-500" style={{ opacity: 0 }}>{n.title?.toLowerCase()}</div>
                     ))}
 
                     <div className="absolute top-8 left-8 sm:top-12 sm:left-12 pointer-events-none z-20">
                         <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-[#2d3748] uppercase leading-none font-serif">Reef</h1>
-                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-2 sm:mt-4 opacity-40 font-sans uppercase text-[#2d3748]">Looking down into the drift</p>
+                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-2 sm:mt-4 opacity-40 font-sans uppercase text-[#2d3748]">Works by Anna Emerson</p>
                     </div>
 
-                    <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} bg-white/95 border-slate-200 border rounded-sm flex flex-col overflow-hidden shadow-2xl`} >
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute right-8 top-8 bottom-8 w-[280px] z-[150] transition-all duration-500 ease-[cubic-bezier(0.2,1,0.2,1)] ${selectedNote ? 'translate-x-0 opacity-100' : 'translate-x-[120%] opacity-0'} bg-white/95 border-slate-200 border rounded-sm flex flex-col overflow-hidden shadow-2xl backdrop-blur-md`} >
                         <div className="flex-1 p-8 flex flex-col relative">
                             <div className="absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-multiply bg-[url('https://www.transparenttextures.com/patterns/felt.png')]" />
                             <button onClick={() => setSelectedNote(null)} className="self-end mb-4 text-[10px] uppercase tracking-widest transition-all px-2 py-1 rounded-sm text-slate-400 hover:text-slate-900 font-sans">Close ✕</button>
@@ -552,7 +557,7 @@
                                 <div className="h-[1px] w-full mt-2 bg-slate-100" />
                             </div>
                             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar text-slate-700 font-serif">
-                                {selectedNote && <div className="prose prose-sm leading-relaxed animate-in fade-in slide-in-from-bottom-2 duration-500" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
+                                {selectedNote && <div className="prose prose-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedNote.content) }} />}
                             </div>
                             <div className={`mt-8 pt-6 border-t border-slate-100 text-slate-300 text-[8px] uppercase tracking-[0.3em] font-sans`}>Origin: GitHub Content API</div>
                         </div>
