@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Anemone Sea</title>
     <!-- CDNs for React, ReactDOM, Babel, and Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -15,7 +15,12 @@
             src: url('https://antijingoist.github.io/web-fonts/OpenDyslexic/OpenDyslexic-Regular.otf') format('opentype');
             font-weight: normal; font-style: normal;
         }
-        body { margin: 0; overflow: hidden; background-color: #FDFBF0; }
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #FDFBF0; 
+            touch-action: none; /* Prevents scrolling while dragging the fish */
+        }
         .font-dyslexic { font-family: 'OpenDyslexic', sans-serif !important; }
         .custom-scrollbar::-webkit-scrollbar { width: 3px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { 
@@ -42,7 +47,7 @@
             if (!text) return "";
             return text
                 .replace(/^### (.*$)/gim, '<h3 class="text-lg font-serif mt-4 mb-1 text-slate-600 font-normal">$1</h3>')
-                .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-5 mb-1 text-slate-800 font-normal">$1</h2>')
+                .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-5 mb-1 text-slate-800 font-normal">$2</h2>')
                 .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-serif mb-2 text-slate-900 font-normal">$1</h1>')
                 .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
                 .replace(/\*(.*)\*/gim, '<em>$1</em>')
@@ -174,7 +179,16 @@
             const [isSyncing, setIsSyncing] = useState(false);
             const [syncStatus, setSyncStatus] = useState('Standby');
 
-            const mouseRef = useRef({ x: -1000, y: -1000, angle: 0, active: false });
+            // --- Enhanced Cursor State ---
+            const mouseRef = useRef({ 
+                x: window.innerWidth / 2, 
+                y: window.innerHeight / 2, 
+                angle: 0, 
+                active: false,
+                lastMove: performance.now(),
+                targetX: window.innerWidth / 2,
+                targetY: window.innerHeight / 2
+            });
             const anemonesRef = useRef([]);
 
             const lightPalette = useMemo(() => [
@@ -247,61 +261,36 @@
                     setSyncStatus('Missing Fields');
                     return;
                 }
-
                 setIsSyncing(true);
                 setSyncStatus('Planting...');
-
                 const { owner, repo, path, branch } = GITHUB_CONFIG;
                 const fileName = newNoteTitle.toLowerCase().replace(/\s+/g, '-') + '.md';
                 const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}/${fileName}`;
 
                 try {
-                    // 1. Check for existing file to get SHA (required for updates)
                     const checkRes = await fetch(`${apiUrl}?ref=${branch}`, {
                         headers: { 'Authorization': `Bearer ${trimmedToken}` }
                     });
-
                     let sha = null;
                     if (checkRes.ok) {
                         const existingFile = await checkRes.json();
                         sha = existingFile.sha;
                     }
-
-                    // 2. Prepare content
                     const contentBase64 = btoa(unescape(encodeURIComponent(newNoteContent)));
-
-                    // 3. Execute PUT request
                     const response = await fetch(apiUrl, {
                         method: 'PUT',
-                        headers: { 
-                            'Authorization': `Bearer ${trimmedToken}`, 
-                            'Content-Type': 'application/json' 
-                        },
-                        body: JSON.stringify({ 
-                            message: `Drift: ${newNoteTitle}`, 
-                            content: contentBase64, 
-                            branch: branch,
-                            sha: sha 
-                        })
+                        headers: { 'Authorization': `Bearer ${trimmedToken}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: `Drift: ${newNoteTitle}`, content: contentBase64, branch: branch, sha: sha })
                     });
-
                     if (!response.ok) {
                         const errorData = await response.json();
-                        let msg = errorData.message || "Push Failed";
-                        if (response.status === 404) {
-                            msg = "Not Found: Check if Repository, Owner, and Branch name ('" + branch + "') are correct.";
-                        }
-                        throw new Error(msg);
+                        throw new Error(errorData.message || "Push Failed");
                     }
-
                     setSyncStatus('Planted');
-                    setNewNoteTitle(""); 
-                    setNewNoteContent(""); 
-                    setIsAddVisible(false);
+                    setNewNoteTitle(""); setNewNoteContent(""); setIsAddVisible(false);
                     setTimeout(fetchFromGithub, 1500);
                 } catch (err) { 
                     setSyncStatus(err.message.substring(0, 30)); 
-                    console.error("Planting Error:", err);
                 } finally { 
                     setIsSyncing(false); 
                 }
@@ -342,6 +331,7 @@
                     cCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
                     cCtx.clearRect(0, 0, w, h);
 
+                    // Background Gradient
                     const grad = rCtx.createLinearGradient(0, 0, w, h);
                     grad.addColorStop(0, '#FDFBF0');
                     grad.addColorStop(0.3, '#DEEFE9');
@@ -350,19 +340,39 @@
                     rCtx.fillStyle = grad;
                     rCtx.fillRect(0, 0, w, h);
 
+                    // Water Caustics
                     rCtx.save();
                     rCtx.globalCompositeOperation = 'overlay';
                     rCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; rCtx.lineWidth = 1;
-                    const t = now * 0.0003;
+                    const ct = now * 0.0003;
                     for (let i = -140; i < w + 140; i += 140) {
                         for (let j = -140; j < h + 140; j += 140) {
                             rCtx.beginPath();
-                            const ox = Math.sin(t + i * 0.01) * 20; const oy = Math.cos(t + j * 0.01) * 20;
+                            const ox = Math.sin(ct + i * 0.01) * 20; const oy = Math.cos(ct + j * 0.01) * 20;
                             rCtx.arc(i + ox, j + oy, 52, 0, Math.PI * 2); rCtx.stroke();
                         }
                     }
                     rCtx.restore();
 
+                    // --- IDLE FISH ANIMATION: SLOW & SHORT ---
+                    const idleTime = now - mouse.lastMove;
+                    if (idleTime > 2000) {
+                        // Much slower roam (0.0002) and smaller radius (w * 0.1)
+                        const roamX = w/2 + Math.sin(now * 0.0002) * (w * 0.1);
+                        const roamY = h/2 + Math.sin(now * 0.0004) * (h * 0.08);
+                        
+                        // Gentle drifty easing (0.02)
+                        const dx = (roamX - mouse.x) * 0.02;
+                        const dy = (roamY - mouse.y) * 0.02;
+                        
+                        if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) {
+                            mouse.angle = Math.atan2(dy, dx);
+                            mouse.x += dx;
+                            mouse.y += dy;
+                        }
+                    }
+
+                    // Physics Updates
                     const existingIds = anemonesRef.current.map(a => a.id).join(',');
                     const currentIds = notes.map(n => n.id).join(',');
 
@@ -372,25 +382,17 @@
                         const minLen = Math.min(...lengths);
                         const newAnemones = [];
                         const minSpacing = 120; 
-                        const maxAttempts = 100;
-
                         notes.forEach((n, i) => {
-                            let relativeScale = 1.0;
-                            if (maxLen !== minLen) {
-                                relativeScale = 0.5 + ((n.charCount - minLen) / (maxLen - minLen)) * 0.5;
-                            }
+                            let relativeScale = 0.5 + ((n.charCount - minLen) / (maxLen - minLen || 1)) * 0.5;
                             let nx, ny, attempts = 0;
                             let spotFound = false;
-                            while (attempts < maxAttempts && !spotFound) {
+                            while (attempts < 100 && !spotFound) {
                                 nx = (0.12 + Math.random() * 0.76) * w;
                                 ny = (0.2 + Math.random() * 0.6) * h;
                                 spotFound = true;
                                 for (let other of newAnemones) {
                                     const combinedMinDist = (minSpacing * relativeScale) + (minSpacing * other.scale);
-                                    if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < combinedMinDist) { 
-                                        spotFound = false; 
-                                        break; 
-                                    }
+                                    if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < combinedMinDist) { spotFound = false; break; }
                                 }
                                 attempts++;
                             }
@@ -423,31 +425,43 @@
                         }
                     });
 
-                    if (mouse.active && mouse.x >= 0) {
-                        cCtx.save();
-                        cCtx.translate(mouse.x, mouse.y);
-                        cCtx.rotate(mouse.angle);
-                        cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); cCtx.fill();
-                        cCtx.fillStyle = '#fff'; cCtx.fillRect(-6, -7, 4, 14); cCtx.fillRect(4, -5, 3, 10);
-                        cCtx.fillStyle = '#000'; cCtx.beginPath(); cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); cCtx.fill();
-                        cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.moveTo(-14, 0);
-                        cCtx.lineTo(-22, -6 + Math.sin(now * 0.01) * 2);
-                        cCtx.lineTo(-22, 6 - Math.sin(now * 0.01) * 2);
-                        cCtx.fill();
-                        cCtx.restore();
-                    }
+                    // Render Clownfish
+                    cCtx.save();
+                    cCtx.translate(mouse.x, mouse.y);
+                    cCtx.rotate(mouse.angle);
+                    cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.ellipse(0, 0, 15, 8, 0, 0, Math.PI * 2); cCtx.fill();
+                    cCtx.fillStyle = '#fff'; cCtx.fillRect(-6, -7, 4, 14); cCtx.fillRect(4, -5, 3, 10);
+                    cCtx.fillStyle = '#000'; cCtx.beginPath(); cCtx.arc(10, -2, 1.5, 0, Math.PI * 2); cCtx.fill();
+                    cCtx.fillStyle = '#ff8c00'; cCtx.beginPath(); cCtx.moveTo(-14, 0);
+                    cCtx.lineTo(-22, -6 + Math.sin(now * 0.01) * 2);
+                    cCtx.lineTo(-22, 6 - Math.sin(now * 0.01) * 2);
+                    cCtx.fill();
+                    cCtx.restore();
+
                     if (currentHover !== hoveredNodeId) setHoveredNodeId(currentHover);
                     frameId = requestAnimationFrame(render);
                 };
                 frameId = requestAnimationFrame(render);
                 return () => { cancelAnimationFrame(frameId); window.removeEventListener('resize', handleResize); };
-            }, [notes, selectedNote, lightPalette]);
+            }, [notes, selectedNote, lightPalette, hoveredNodeId]);
 
-            const handleMouseMove = (e) => {
-                const dx = e.clientX - mouseRef.current.x;
-                const dy = e.clientY - mouseRef.current.y;
-                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) mouseRef.current.angle = Math.atan2(dy, dx);
-                mouseRef.current.x = e.clientX; mouseRef.current.y = e.clientY; mouseRef.current.active = true;
+            const updateMouse = (nx, ny) => {
+                const dx = nx - mouseRef.current.x;
+                const dy = ny - mouseRef.current.y;
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    mouseRef.current.angle = Math.atan2(dy, dx);
+                    mouseRef.current.lastMove = performance.now();
+                }
+                mouseRef.current.x = nx;
+                mouseRef.current.y = ny;
+                mouseRef.current.active = true;
+            };
+
+            const handleMouseMove = (e) => updateMouse(e.clientX, e.clientY);
+            
+            const handleTouch = (e) => {
+                const touch = e.touches[0];
+                updateMouse(touch.clientX, touch.clientY);
             };
 
             const SortButton = ({ mode, label }) => (
@@ -463,15 +477,15 @@
                 <div 
                     className="relative w-full h-screen transition-colors duration-[1500ms] overflow-hidden select-none cursor-none bg-[#FDFBF0]"
                     onMouseMove={handleMouseMove}
+                    onTouchStart={handleTouch}
+                    onTouchMove={handleTouch}
                     onClick={() => {
                         if (hoveredNodeId) { 
                             setSelectedNote(notes.find(n => n.id === hoveredNodeId)); 
                             setIsAddVisible(false);
                         } 
                         else { 
-                            setIsListOpen(false); 
-                            setSelectedNote(null); 
-                            setIsAddVisible(false); 
+                            setIsListOpen(false); setSelectedNote(null); setIsAddVisible(false); 
                         }
                     }}
                 >
