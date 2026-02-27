@@ -167,7 +167,7 @@
                 this.scale = scale; 
                 this.noiseSeed = Math.random() * 1000;
                 this.tentacles = [];
-                this.spawnTime = spawnTime; // Synced with the batch load time
+                this.spawnTime = spawnTime;
                 
                 const count = Math.floor((26 + Math.random() * 6) * Math.sqrt(this.scale));
                 for (let i = 0; i < count; i++) {
@@ -216,7 +216,6 @@
 
             draw(ctx, isSelected, now) {
                 const age = now - this.spawnTime;
-                // Extended duration for a much smoother entry
                 const fadeInAlpha = Math.min(1, age / 1200); 
                 if (fadeInAlpha <= 0) return;
 
@@ -267,7 +266,7 @@
             const [newNoteTitle, setNewNoteTitle] = useState("");
             const [newNoteContent, setNewNoteContent] = useState("");
             const [accessToken, setAccessToken] = useState("");
-            const [syncStatus, setSyncStatus] = useState('initializing'); 
+            const [syncStatus, setSyncStatus] = useState('starting up...'); 
             const [isSyncing, setIsSyncing] = useState(false);
             const [sortMode, setSortMode] = useState('newest'); 
 
@@ -344,17 +343,18 @@
                 calculateLayout(notes);
             }, [notes, calculateLayout]);
 
-            // Sync Logic: Explicitly hits the reef to populate data
-            const fetchFromReef = useCallback(async () => {
-                const trimmedToken = accessToken.trim();
+            // Sync Logic: Robust hit to GitHub
+            const fetchFromReef = useCallback(async (tokenOverride = "") => {
+                const trimmedToken = (tokenOverride || accessToken).trim();
                 const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
                 setIsSyncing(true); 
                 setSyncStatus('syncing reef...');
+                
                 try {
                     const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${REPO_CONFIG.path}?ref=${REPO_CONFIG.branch}`;
                     const response = await fetchWithRetry(apiUrl, { headers });
                     const contents = await response.json(); 
-                    if (!Array.isArray(contents)) throw new Error('invalid reef');
+                    if (!Array.isArray(contents)) throw new Error('invalid reef response');
                     
                     const fetchedNotes = [];
                     for (const file of contents) {
@@ -373,51 +373,77 @@
                         }
                     }
                     
-                    setNotes(fetchedNotes);
-                    setSyncStatus('active');
+                    if (fetchedNotes.length > 0) {
+                        setNotes(fetchedNotes);
+                        setSyncStatus('active');
 
-                    if (fetchedNotes.length > 0 && dbRef.current) {
-                        const { doc, setDoc } = window.FirebaseSDK;
-                        await setDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'), {
-                            notes: fetchedNotes,
-                            timestamp: Date.now()
-                        });
+                        // Save to cache for offline/fast load
+                        if (dbRef.current) {
+                            const { doc, setDoc } = window.FirebaseSDK;
+                            setDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'), {
+                                notes: fetchedNotes,
+                                timestamp: Date.now()
+                            }).catch(() => {});
+                        }
+                    } else {
+                        setSyncStatus('reef empty');
                     }
                 } catch (err) {
-                    setSyncStatus(err.message === 'rate limited' ? 'rate limited' : 'sync error');
-                } finally { setIsSyncing(false); }
+                    setSyncStatus(err.message === 'rate limited' ? 'rate limited' : 'sync failed');
+                } finally { 
+                    setIsSyncing(false); 
+                }
             }, [accessToken, appId]);
 
-            // Initial Mount Effect: Automatically triggers authentication, cache retrieval, and sync
+            // Robust startup sequence with SDK polling
             useEffect(() => {
-                const init = async () => {
-                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, getDoc } = window.FirebaseSDK;
-                    const firebaseConfig = JSON.parse(__firebase_config);
-                    const app = initializeApp(firebaseConfig);
-                    const auth = getAuth(app);
-                    dbRef.current = getFirestore(app);
-
-                    setSyncStatus('authenticating...');
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-
-                    setSyncStatus('loading cache...');
+                const startUpSequence = async () => {
                     try {
-                        const cacheSnap = await getDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'));
-                        if (cacheSnap.exists()) {
-                            const cachedNotes = cacheSnap.data().notes || [];
-                            setNotes(cachedNotes);
+                        // Wait for Firebase module scripts to be attached to window
+                        let waitAttempts = 0;
+                        while (!window.FirebaseSDK && waitAttempts < 50) {
+                            await new Promise(r => setTimeout(r, 100));
+                            waitAttempts++;
                         }
-                    } catch (e) {}
 
-                    // Automaticaly hit Sync
-                    fetchFromReef();
+                        // Even if Firebase SDK fails or is missing (local hosting), we continue to Sync
+                        if (window.FirebaseSDK && typeof __firebase_config !== 'undefined') {
+                            const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, getDoc } = window.FirebaseSDK;
+                            const firebaseConfig = JSON.parse(__firebase_config);
+                            const app = initializeApp(firebaseConfig);
+                            const auth = getAuth(app);
+                            dbRef.current = getFirestore(app);
+
+                            setSyncStatus('authenticating...');
+                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+
+                            // Try to load cache first
+                            try {
+                                const cacheSnap = await getDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'));
+                                if (cacheSnap.exists()) {
+                                    const cachedNotes = cacheSnap.data().notes || [];
+                                    setNotes(cachedNotes);
+                                }
+                            } catch (e) {}
+                        }
+
+                        // Always hit sync from GitHub
+                        await fetchFromReef();
+
+                    } catch (error) {
+                        console.error("Startup Sequence Exception:", error);
+                        // If we had a hard crash but managed to define fetchFromReef, try one last sync
+                        try { await fetchFromReef(); } catch(e) { setSyncStatus('init error'); }
+                    }
                 };
-                init();
 
+                startUpSequence();
+
+                // Particle background init
                 const p = [];
                 for(let i=0; i<45; i++) p.push({
                     x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
@@ -652,10 +678,10 @@
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
                                 <div className="text-[10px] tracking-[0.3em] opacity-40 font-sans leading-tight">index</div>
-                                <div className={`text-[7px] font-sans mt-1 ${syncStatus.includes('error') || syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
+                                <div className={`text-[7px] font-sans mt-1 ${syncStatus.includes('failed') || syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
                             </div>
                             <div className="flex items-center gap-3">
-                                <button onClick={fetchFromReef} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
+                                <button onClick={() => fetchFromReef()} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
                                 <button onClick={() => setEvolveMode(evolveMode === 'none' ? 'key' : 'none')} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">evolve</button>
                             </div>
                         </div>
@@ -665,7 +691,7 @@
                                 {evolveMode === 'key' && (
                                     <div className="animate-in fade-in slide-in-from-top-1">
                                         <input type="password" placeholder="ghp_ token" value={accessToken} onChange={(e) => setAccessToken(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[11px] mb-2 p-1 font-sans focus:outline-none" />
-                                        <button onClick={() => setEvolveMode('menu')} className="w-full py-1 text-[8px] font-sans bg-teal-700 text-white uppercase tracking-widest">access menu</button>
+                                        <button onClick={() => { setEvolveMode('menu'); fetchFromReef(); }} className="w-full py-1 text-[8px] font-sans bg-teal-700 text-white uppercase tracking-widest">access menu</button>
                                     </div>
                                 )}
 
