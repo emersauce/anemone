@@ -47,13 +47,6 @@
             -webkit-hyphens: auto;
             -ms-hyphens: auto;
         }
-        @keyframes pulse-soft {
-            0%, 100% { opacity: 0.3; }
-            50% { opacity: 0.15; }
-        }
-        .animate-pulse-soft {
-            animation: pulse-soft 3s ease-in-out infinite;
-        }
         .prose img {
             margin: 2.5rem auto;
             border-radius: 0.125rem;
@@ -75,6 +68,25 @@
             repo: 'anemone',
             path: 'drifts',
             branch: 'network'
+        };
+
+        // Seeded random helper to ensure spots persist based on content ID
+        const mulberry32 = (a) => {
+            return () => {
+                let t = a += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+        };
+
+        const getSeedFromStr = (str) => {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = ((hash << 5) - hash) + str.charCodeAt(i);
+                hash |= 0;
+            }
+            return Math.abs(hash);
         };
 
         const fetchWithRetry = async (url, options = {}, retries = 3, backoff = 1000) => {
@@ -146,7 +158,7 @@
         }
 
         class AnemoneNode {
-            constructor(id, x, y, palette, scale) {
+            constructor(id, x, y, palette, scale, spawnTime) {
                 this.id = id;
                 this.x = x; this.y = y;
                 this.baseX = x; this.baseY = y;
@@ -155,7 +167,7 @@
                 this.scale = scale; 
                 this.noiseSeed = Math.random() * 1000;
                 this.tentacles = [];
-                this.spawnTime = performance.now();
+                this.spawnTime = spawnTime; // Synced with the batch load time
                 
                 const count = Math.floor((26 + Math.random() * 6) * Math.sqrt(this.scale));
                 for (let i = 0; i < count; i++) {
@@ -204,7 +216,10 @@
 
             draw(ctx, isSelected, now) {
                 const age = now - this.spawnTime;
-                const fadeInAlpha = Math.min(1, age / 600); 
+                // Extended duration for a much smoother entry
+                const fadeInAlpha = Math.min(1, age / 1200); 
+                if (fadeInAlpha <= 0) return;
+
                 ctx.save();
                 ctx.globalAlpha = fadeInAlpha;
                 
@@ -252,11 +267,10 @@
             const [newNoteTitle, setNewNoteTitle] = useState("");
             const [newNoteContent, setNewNoteContent] = useState("");
             const [accessToken, setAccessToken] = useState("");
-            const [syncStatus, setSyncStatus] = useState('standby');
+            const [syncStatus, setSyncStatus] = useState('initializing'); 
             const [isSyncing, setIsSyncing] = useState(false);
             const [sortMode, setSortMode] = useState('newest'); 
 
-            // Firebase Storage Ref
             const dbRef = useRef(null);
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'anemone-reef';
 
@@ -286,79 +300,56 @@
                 return sn;
             }, [notes, sortMode]);
 
-            // Layout calculation (avoiding the title area)
-            useEffect(() => {
-                if (notes.length === 0) { anemonesRef.current = []; return; }
+            // Layout Engine: Deterministic positioning based on content ID
+            const calculateLayout = useCallback((currentNotes) => {
+                if (!currentNotes || currentNotes.length === 0) {
+                    anemonesRef.current = [];
+                    return;
+                }
                 const w = window.innerWidth, h = window.innerHeight;
-                const lengths = notes.map(n => n.charCount);
+                const lengths = currentNotes.map(n => n.charCount || 100);
                 const maxLen = Math.max(...lengths), minLen = Math.min(...lengths);
                 const newAnemones = [];
-                let clearanceFactor = 240; 
+                const batchSpawnTime = performance.now();
 
-                for (let i = 0; i < notes.length; i++) {
-                    const n = notes[i];
-                    const relativeScale = 0.8 + ((n.charCount - minLen) / (maxLen - minLen || 1)) * 0.5;
+                currentNotes.forEach((n, i) => {
+                    const seededRandom = mulberry32(getSeedFromStr(n.id));
+                    const relativeScale = 0.7 + ((n.charCount - minLen) / (maxLen - minLen || 1)) * 0.6;
                     let nx, ny, spotFound = false, attempts = 0;
-                    while (attempts < 1500 && !spotFound) {
-                        nx = (0.1 + Math.random() * 0.8) * w;
-                        ny = (0.2 + Math.random() * 0.6) * h;
+                    let baseClearance = 220;
+
+                    while (attempts < 2000 && !spotFound) {
+                        nx = (0.15 + seededRandom() * 0.7) * w;
+                        ny = (0.25 + seededRandom() * 0.5) * h;
                         spotFound = true;
-                        if (nx < 400 && ny < 240) spotFound = false; 
+                        if (nx < 450 && ny < 250) spotFound = false; 
+
                         if (spotFound) {
                             for (let other of newAnemones) { 
-                                const minDist = (clearanceFactor * relativeScale) + (clearanceFactor * other.scale);
-                                if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < minDist) { spotFound = false; break; } 
+                                const minDist = (baseClearance * relativeScale) + (baseClearance * other.scale);
+                                if (Math.sqrt((nx - other.baseX)**2 + (ny - other.baseY)**2) < minDist) { 
+                                    spotFound = false; break; 
+                                } 
                             }
                         }
-                        if (attempts > 500) clearanceFactor *= 0.999;
                         attempts++;
+                        if (attempts > 100) baseClearance *= 0.98;
                     }
-                    newAnemones.push(new AnemoneNode(n.id, nx, ny, lightPalette[i % lightPalette.length], relativeScale));
-                }
-                anemonesRef.current = newAnemones;
-            }, [notes]);
-
-            // Initial Firebase & Cache Loading
-            useEffect(() => {
-                const init = async () => {
-                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, getDoc } = window.FirebaseSDK;
-                    const firebaseConfig = JSON.parse(__firebase_config);
-                    const app = initializeApp(firebaseConfig);
-                    const auth = getAuth(app);
-                    dbRef.current = getFirestore(app);
-
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-
-                    // Try to load from cloud cache first
-                    try {
-                        const cacheSnap = await getDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'));
-                        if (cacheSnap.exists()) {
-                            setNotes(cacheSnap.data().notes || []);
-                            setSyncStatus('from cache');
-                        }
-                    } catch (e) { console.error("Cache load failed", e); }
-
-                    fetchFromReef();
-                };
-                init();
-
-                const p = [];
-                for(let i=0; i<45; i++) p.push({
-                    x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
-                    s: 0.4 + Math.random() * 1.5, v: 0.05 + Math.random() * 0.12,
-                    c: `rgba(255, 255, 255, ${0.2 + Math.random() * 0.3})`
+                    newAnemones.push(new AnemoneNode(n.id, nx, ny, lightPalette[i % lightPalette.length], relativeScale, batchSpawnTime));
                 });
-                particlesRef.current = p;
-            }, []);
+                anemonesRef.current = newAnemones;
+            }, [lightPalette]);
 
+            useEffect(() => {
+                calculateLayout(notes);
+            }, [notes, calculateLayout]);
+
+            // Sync Logic: Explicitly hits the reef to populate data
             const fetchFromReef = useCallback(async () => {
                 const trimmedToken = accessToken.trim();
                 const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
-                setIsSyncing(true); setSyncStatus('syncing reef...');
+                setIsSyncing(true); 
+                setSyncStatus('syncing reef...');
                 try {
                     const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${REPO_CONFIG.path}?ref=${REPO_CONFIG.branch}`;
                     const response = await fetchWithRetry(apiUrl, { headers });
@@ -385,7 +376,6 @@
                     setNotes(fetchedNotes);
                     setSyncStatus('active');
 
-                    // Biological Memory: Update cloud cache
                     if (fetchedNotes.length > 0 && dbRef.current) {
                         const { doc, setDoc } = window.FirebaseSDK;
                         await setDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'), {
@@ -396,7 +386,46 @@
                 } catch (err) {
                     setSyncStatus(err.message === 'rate limited' ? 'rate limited' : 'sync error');
                 } finally { setIsSyncing(false); }
-            }, [accessToken]);
+            }, [accessToken, appId]);
+
+            // Initial Mount Effect: Automatically triggers authentication, cache retrieval, and sync
+            useEffect(() => {
+                const init = async () => {
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, getDoc } = window.FirebaseSDK;
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    const app = initializeApp(firebaseConfig);
+                    const auth = getAuth(app);
+                    dbRef.current = getFirestore(app);
+
+                    setSyncStatus('authenticating...');
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+
+                    setSyncStatus('loading cache...');
+                    try {
+                        const cacheSnap = await getDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'));
+                        if (cacheSnap.exists()) {
+                            const cachedNotes = cacheSnap.data().notes || [];
+                            setNotes(cachedNotes);
+                        }
+                    } catch (e) {}
+
+                    // Automaticaly hit Sync
+                    fetchFromReef();
+                };
+                init();
+
+                const p = [];
+                for(let i=0; i<45; i++) p.push({
+                    x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
+                    s: 0.4 + Math.random() * 1.5, v: 0.05 + Math.random() * 0.12,
+                    c: `rgba(255, 255, 255, ${0.2 + Math.random() * 0.3})`
+                });
+                particlesRef.current = p;
+            }, [fetchFromReef, appId]);
 
             const handleAnemoneSelection = async (note) => {
                 setSelectedNote(note);
@@ -414,6 +443,13 @@
                         }
                     } catch (e) {}
                 }
+            };
+
+            const startAdapting = (note) => {
+                setEditingNote(note);
+                setNewNoteTitle(note.title);
+                setNewNoteContent(note.content);
+                setEvolveMode('adapt_form');
             };
 
             const pushToGitHub = async (title, content, sha = null) => {
@@ -438,7 +474,7 @@
             const handleEvolve = async () => {
                 setIsSyncing(true);
                 try {
-                    const isAdapting = evolveMode === 'adapt' && editingNote;
+                    const isAdapting = evolveMode === 'adapt_form' && editingNote;
                     await pushToGitHub(newNoteTitle, newNoteContent, isAdapting ? editingNote.sha : null);
                     setSyncStatus(isAdapting ? 'adapted' : 'attached');
                     setNewNoteTitle(""); setNewNoteContent(""); setEvolveMode('none'); setEditingNote(null);
@@ -464,6 +500,7 @@
                 finally { setIsSyncing(false); }
             };
 
+            // Main Animation and Interaction Loop
             useEffect(() => {
                 const rCanvas = reefCanvasRef.current;
                 const cursorCanvas = cursorCanvasRef.current;
@@ -479,6 +516,7 @@
                         c.width = window.innerWidth * cappedDPR; c.height = window.innerHeight * cappedDPR;
                         c.style.width = `${window.innerWidth}px`; c.style.height = `${window.innerHeight}px`;
                     });
+                    calculateLayout(notes);
                 };
                 window.addEventListener('resize', handleResize);
                 handleResize();
@@ -550,8 +588,11 @@
                             lx = Math.max(80, Math.min(w - 80, lx));
                             ly = Math.max(80, Math.min(h - 80, ly));
                             el.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%)`;
+                            
+                            const age = now - a.spawnTime;
+                            const textFade = Math.min(1, age / 1500);
                             const isHovered = (Math.sqrt((a.x - mouse.x)**2 + (a.y - mouse.y)**2)) < 120 * a.scale;
-                            el.style.opacity = (isHovered ? '1' : '0.4') * Math.min(1, (now - a.spawnTime) / 400);
+                            el.style.opacity = (isHovered ? '1' : '0.4') * textFade;
                         }
                     });
 
@@ -570,7 +611,7 @@
                 };
                 frameId = requestAnimationFrame(render);
                 return () => { cancelAnimationFrame(frameId); window.removeEventListener('resize', handleResize); };
-            }, [notes, selectedNote, isListOpen, lightPalette, isReadingFullScreen, isReadAllMode]);
+            }, [notes, calculateLayout]);
 
             const updateMouse = (nx, ny) => {
                 const dx = nx - mouseRef.current.x, dy = ny - mouseRef.current.y;
@@ -611,7 +652,7 @@
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
                                 <div className="text-[10px] tracking-[0.3em] opacity-40 font-sans leading-tight">index</div>
-                                <div className={`text-[7px] font-sans mt-1 ${syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
+                                <div className={`text-[7px] font-sans mt-1 ${syncStatus.includes('error') || syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
                             </div>
                             <div className="flex items-center gap-3">
                                 <button onClick={fetchFromReef} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
@@ -636,9 +677,9 @@
                                     </div>
                                 )}
                                 
-                                {(evolveMode === 'attach' || evolveMode === 'adapt') && (
+                                {(evolveMode === 'attach' || evolveMode === 'adapt_form') && (
                                     <div className="animate-in fade-in slide-in-from-top-1">
-                                        <div className="text-[7px] opacity-30 uppercase tracking-widest mb-1">{evolveMode === 'adapt' ? 'adapting organism' : 'new organism'}</div>
+                                        <div className="text-[7px] opacity-30 uppercase tracking-widest mb-1">{evolveMode === 'adapt_form' ? 'adapting organism' : 'new organism'}</div>
                                         <input type="text" placeholder="title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[12px] mb-2 p-1 font-sans focus:outline-none" />
                                         <textarea placeholder="content..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-teal-900/10 text-teal-900 rounded-sm text-[11px] mb-2 p-2 font-serif focus:outline-none bg-white/40 custom-scrollbar" />
                                         <div className="flex gap-1">
@@ -648,7 +689,7 @@
                                     </div>
                                 )}
 
-                                {(evolveMode === 'cull' || evolveMode === 'adapt_select') && (
+                                {(evolveMode === 'cull' || evolveMode === 'adapt') && (
                                     <div className="animate-in fade-in slide-in-from-top-1 px-1">
                                         <div className="text-[7px] tracking-[0.2em] mb-1 opacity-40 font-sans uppercase text-center">{evolveMode === 'cull' ? 'cull: choose one' : 'adapt: choose one'}</div>
                                         <button onClick={() => setEvolveMode('menu')} className="w-full py-1 text-[7px] font-sans opacity-30 hover:opacity-100 uppercase tracking-widest">cancel</button>
