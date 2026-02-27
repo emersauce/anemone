@@ -9,6 +9,16 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase for Persistence Cache -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FirebaseSDK = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, doc, setDoc, getDoc };
+    </script>
+
     <style>
         @font-face {
             font-family: 'OpenDyslexic';
@@ -45,9 +55,10 @@
             animation: pulse-soft 3s ease-in-out infinite;
         }
         .prose img {
-            margin-left: auto;
-            margin-right: auto;
-            max-height: 400px;
+            margin: 2.5rem auto;
+            border-radius: 0.125rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            max-height: 450px;
             object-fit: contain;
         }
         .no-morph { transition: opacity 0.3s ease-out !important; transform: none !important; }
@@ -69,7 +80,7 @@
         const fetchWithRetry = async (url, options = {}, retries = 3, backoff = 1000) => {
             try {
                 const response = await fetch(url, options);
-                if (response.status === 401) throw new Error("only users with private key may contribute");
+                if (response.status === 401) throw new Error("unauthorized");
                 if (response.status === 403) {
                     const remaining = response.headers.get('x-ratelimit-remaining');
                     if (remaining === '0') throw new Error('rate limited');
@@ -80,7 +91,6 @@
                 }
                 return response;
             } catch (error) {
-                if (error.message === "only users with private key may contribute") throw error;
                 if (retries > 0 && error.message !== 'rate limited') {
                     await new Promise(resolve => setTimeout(resolve, backoff));
                     return fetchWithRetry(url, options, retries - 1, backoff * 2);
@@ -111,11 +121,11 @@
             return text
                 .replace(/!\[(.*?)\]\((.*?)\)/gim, (match, alt, url) => {
                     const fullUrl = resolveUrl(url);
-                    return `<img src="${fullUrl}" alt="${alt}" class="my-8 rounded-sm shadow-sm border border-slate-100" onerror="this.style.display='none'" />`;
+                    return `<img src="${fullUrl}" alt="${alt}" class="prose-img" />`;
                 })
                 .replace(/\[(.*?)\]\((.*?)\)/gim, (match, label, url) => {
                     const fullUrl = resolveUrl(url);
-                    return `<a href="${fullUrl}" target="_blank" rel="noopener noreferrer" class="text-teal-700 underline underline-offset-4 hover:text-teal-900 transition-colors">${label}</a>`;
+                    return `<a href="${fullUrl}" target="_blank" rel="noopener noreferrer" class="text-teal-700 underline underline-offset-4 hover:text-teal-900">${label}</a>`;
                 })
                 .replace(/^### (.*$)/gim, '<h3 class="text-lg font-serif mt-6 mb-2 text-slate-700 font-medium">$1</h3>')
                 .replace(/^## (.*$)/gim, '<h2 class="text-xl font-serif mt-8 mb-3 text-slate-800 font-normal border-b border-slate-100 pb-1">$2</h2>')
@@ -237,8 +247,7 @@
             const [isReadAllMode, setIsReadAllMode] = useState(false);
             const [isListOpen, setIsListOpen] = useState(false);
             
-            // Evolve logic
-            const [evolveMode, setEvolveMode] = useState('none'); // 'none', 'key', 'menu', 'attach', 'cull', 'adapt'
+            const [evolveMode, setEvolveMode] = useState('none'); 
             const [editingNote, setEditingNote] = useState(null);
             const [newNoteTitle, setNewNoteTitle] = useState("");
             const [newNoteContent, setNewNoteContent] = useState("");
@@ -246,6 +255,10 @@
             const [syncStatus, setSyncStatus] = useState('standby');
             const [isSyncing, setIsSyncing] = useState(false);
             const [sortMode, setSortMode] = useState('newest'); 
+
+            // Firebase Storage Ref
+            const dbRef = useRef(null);
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'anemone-reef';
 
             const mouseRef = useRef({ 
                 x: window.innerWidth / 2, 
@@ -273,6 +286,7 @@
                 return sn;
             }, [notes, sortMode]);
 
+            // Layout calculation (avoiding the title area)
             useEffect(() => {
                 if (notes.length === 0) { anemonesRef.current = []; return; }
                 const w = window.innerWidth, h = window.innerHeight;
@@ -289,7 +303,7 @@
                         nx = (0.1 + Math.random() * 0.8) * w;
                         ny = (0.2 + Math.random() * 0.6) * h;
                         spotFound = true;
-                        if (nx < 400 && ny < 240) spotFound = false; // Avoid title
+                        if (nx < 400 && ny < 240) spotFound = false; 
                         if (spotFound) {
                             for (let other of newAnemones) { 
                                 const minDist = (clearanceFactor * relativeScale) + (clearanceFactor * other.scale);
@@ -302,16 +316,36 @@
                     newAnemones.push(new AnemoneNode(n.id, nx, ny, lightPalette[i % lightPalette.length], relativeScale));
                 }
                 anemonesRef.current = newAnemones;
-            }, [notes.length]);
+            }, [notes]);
 
+            // Initial Firebase & Cache Loading
             useEffect(() => {
-                const handleKeyDown = (e) => {
-                    if (e.key === 'Escape') { 
-                        setIsListOpen(false); setEvolveMode('none'); 
-                        setSelectedNote(null); setIsReadAllMode(false);
+                const init = async () => {
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, getDoc } = window.FirebaseSDK;
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    const app = initializeApp(firebaseConfig);
+                    const auth = getAuth(app);
+                    dbRef.current = getFirestore(app);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
                     }
+
+                    // Try to load from cloud cache first
+                    try {
+                        const cacheSnap = await getDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'));
+                        if (cacheSnap.exists()) {
+                            setNotes(cacheSnap.data().notes || []);
+                            setSyncStatus('from cache');
+                        }
+                    } catch (e) { console.error("Cache load failed", e); }
+
+                    fetchFromReef();
                 };
-                window.addEventListener('keydown', handleKeyDown);
+                init();
+
                 const p = [];
                 for(let i=0; i<45; i++) p.push({
                     x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
@@ -319,7 +353,6 @@
                     c: `rgba(255, 255, 255, ${0.2 + Math.random() * 0.3})`
                 });
                 particlesRef.current = p;
-                return () => window.removeEventListener('keydown', handleKeyDown);
             }, []);
 
             const fetchFromReef = useCallback(async () => {
@@ -330,36 +363,47 @@
                     const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${REPO_CONFIG.path}?ref=${REPO_CONFIG.branch}`;
                     const response = await fetchWithRetry(apiUrl, { headers });
                     const contents = await response.json(); 
-                    const markdownFiles = contents.filter(item => item.type === 'file' && /\.(md|txt)$/i.test(item.name));
+                    if (!Array.isArray(contents)) throw new Error('invalid reef');
                     
                     const fetchedNotes = [];
-                    for (const file of markdownFiles) {
-                        try {
-                            const fileRes = await fetch(file.download_url);
-                            const text = await fileRes.text();
-                            fetchedNotes.push({
-                                id: `anemone-${file.sha}`, 
-                                sha: file.sha,
-                                path: file.path, 
-                                title: file.name.replace(/\.[^/.]+$/, "").replace(/-/g, ' ').toLowerCase(),
-                                date: null, content: text, charCount: text.length 
-                            });
-                        } catch (e) {}
+                    for (const file of contents) {
+                        if (file.type === 'file' && /\.(md|txt)$/i.test(file.name)) {
+                            try {
+                                const fileRes = await fetch(file.download_url);
+                                const text = await fileRes.text();
+                                fetchedNotes.push({
+                                    id: `anemone-${file.sha}`, 
+                                    sha: file.sha,
+                                    path: file.path, 
+                                    title: file.name.replace(/\.[^/.]+$/, "").replace(/-/g, ' ').toLowerCase(),
+                                    date: null, content: text, charCount: text.length 
+                                });
+                            } catch (e) {}
+                        }
                     }
-                    setNotes(fetchedNotes); setSyncStatus('active');
+                    
+                    setNotes(fetchedNotes);
+                    setSyncStatus('active');
+
+                    // Biological Memory: Update cloud cache
+                    if (fetchedNotes.length > 0 && dbRef.current) {
+                        const { doc, setDoc } = window.FirebaseSDK;
+                        await setDoc(doc(dbRef.current, 'artifacts', appId, 'public', 'data', 'reef_cache', 'last_known_good'), {
+                            notes: fetchedNotes,
+                            timestamp: Date.now()
+                        });
+                    }
                 } catch (err) {
-                    setSyncStatus(err.message.includes('private key') ? err.message : 'sync error');
+                    setSyncStatus(err.message === 'rate limited' ? 'rate limited' : 'sync error');
                 } finally { setIsSyncing(false); }
             }, [accessToken]);
 
             const handleAnemoneSelection = async (note) => {
                 setSelectedNote(note);
                 if (note && !note.date) {
-                    const trimmedToken = accessToken.trim();
-                    const headers = trimmedToken ? { 'Authorization': `Bearer ${trimmedToken}` } : {};
                     try {
                         const commitUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/commits?path=${note.path}&sha=${REPO_CONFIG.branch}&per_page=1`;
-                        const res = await fetch(commitUrl, { headers });
+                        const res = await fetch(commitUrl);
                         if (res.ok) {
                             const data = await res.json();
                             if (data.length > 0) {
@@ -372,51 +416,42 @@
                 }
             };
 
-            const attachOrAdaptToPermanent = async () => {
+            const pushToGitHub = async (title, content, sha = null) => {
                 const trimmedToken = accessToken.trim();
-                if (!newNoteTitle || !newNoteContent || !trimmedToken) { setSyncStatus('token required'); return; }
-                setIsSyncing(true); setSyncStatus('processing...');
-                
-                const isAdapting = evolveMode === 'adapt' && editingNote;
-                const fileName = isAdapting ? editingNote.path.split('/').pop() : (newNoteTitle.toLowerCase().replace(/\s+/g, '-') + '.md');
+                const fileName = sha && editingNote ? editingNote.path.split('/').pop() : (title.toLowerCase().replace(/\s+/g, '-') + '.md');
                 const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${REPO_CONFIG.path}/${fileName}`;
                 
+                const contentBase64 = btoa(unescape(encodeURIComponent(content)));
+                const response = await fetch(apiUrl, {
+                    method: 'PUT',
+                    headers: { 'Authorization': `Bearer ${trimmedToken}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        message: sha ? `adapt: ${title}` : `attach: ${title}`, 
+                        content: contentBase64, 
+                        branch: REPO_CONFIG.branch, 
+                        sha: sha 
+                    })
+                });
+                if (!response.ok) throw new Error("push failed");
+            };
+
+            const handleEvolve = async () => {
+                setIsSyncing(true);
                 try {
-                    let sha = null;
-                    if (isAdapting) {
-                        sha = editingNote.sha;
-                    } else {
-                        const checkRes = await fetch(`${apiUrl}?ref=${REPO_CONFIG.branch}`, { headers: { 'Authorization': `Bearer ${trimmedToken}` } });
-                        if (checkRes.ok) { const existingFile = await checkRes.json(); sha = existingFile.sha; }
-                    }
-                    
-                    const contentBase64 = btoa(unescape(encodeURIComponent(newNoteContent)));
-                    const response = await fetch(apiUrl, {
-                        method: 'PUT',
-                        headers: { 'Authorization': `Bearer ${trimmedToken}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                            message: isAdapting ? `adapt: ${newNoteTitle}` : `attach: ${newNoteTitle}`, 
-                            content: contentBase64, 
-                            branch: REPO_CONFIG.branch, 
-                            sha: sha 
-                        })
-                    });
-                    if (!response.ok) throw new Error("push failed");
-                    
-                    setSyncStatus(isAdapting ? 'adapted' : 'attached'); 
+                    const isAdapting = evolveMode === 'adapt' && editingNote;
+                    await pushToGitHub(newNoteTitle, newNoteContent, isAdapting ? editingNote.sha : null);
+                    setSyncStatus(isAdapting ? 'adapted' : 'attached');
                     setNewNoteTitle(""); setNewNoteContent(""); setEvolveMode('none'); setEditingNote(null);
                     setTimeout(fetchFromReef, 1500);
-                } catch (err) { 
-                    setSyncStatus('error'); 
-                } finally { setIsSyncing(false); }
+                } catch (err) { setSyncStatus('error'); }
+                finally { setIsSyncing(false); }
             };
 
             const cullFromPermanent = async (note) => {
                 const trimmedToken = accessToken.trim();
-                if (!trimmedToken) { setSyncStatus('token required'); return; }
                 setIsSyncing(true); setSyncStatus('culling...');
-                const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${note.path}`;
                 try {
+                    const apiUrl = `https://api.github.com/repos/${REPO_CONFIG.owner}/${REPO_CONFIG.repo}/contents/${note.path}`;
                     const response = await fetch(apiUrl, {
                         method: 'DELETE',
                         headers: { 'Authorization': `Bearer ${trimmedToken}`, 'Content-Type': 'application/json' },
@@ -425,16 +460,8 @@
                     if (!response.ok) throw new Error("cull failed");
                     setSyncStatus('culled'); 
                     setTimeout(fetchFromReef, 1500);
-                } catch (err) {
-                    setSyncStatus('error');
-                } finally { setIsSyncing(false); }
-            };
-
-            const startAdapting = (note) => {
-                setEditingNote(note);
-                setNewNoteTitle(note.title);
-                setNewNoteContent(note.content);
-                setEvolveMode('adapt');
+                } catch (err) { setSyncStatus('error'); }
+                finally { setIsSyncing(false); }
             };
 
             useEffect(() => {
@@ -474,14 +501,13 @@
                         grad.addColorStop(1, color.replace('opacity', '0'));
                         rCtx.fillStyle = grad; rCtx.fillRect(0, 0, w, h);
                     };
-
                     drawPearlPatch(w * 0.4, h * 0.4, 'rgba(210, 180, 255, opacity)', w * 0.8, '0.2'); 
                     drawPearlPatch(w * 0.7, h * 0.3, 'rgba(180, 255, 240, opacity)', w * 0.7, '0.15'); 
                     drawPearlPatch(w * 0.2, h * 0.8, 'rgba(255, 182, 193, opacity)', w * 0.9, '0.22'); 
 
                     rCtx.save();
                     rCtx.globalCompositeOperation = 'screen';
-                    rCtx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                    rCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
                     rCtx.lineWidth = 1.6;
                     const ct = now * 0.00022;
                     for (let i = -160; i < w + 160; i += 130) {
@@ -553,10 +579,6 @@
             };
 
             const closeNote = () => { setSelectedNote(null); setIsReadingFullScreen(false); };
-            const openNote = (note) => { 
-                if (evolveMode === 'cull' || evolveMode === 'adapt') return;
-                setIsReadingFullScreen(false); handleAnemoneSelection(note); 
-            };
 
             return (
                 <div 
@@ -571,7 +593,7 @@
                             const dx = a.x - mouseRef.current.x, dy = a.y - mouseRef.current.y, dist = Math.sqrt(dx*dx + dy*dy);
                             if (dist < 120 * a.scale && dist < minDistance) { minDistance = dist; closestId = a.id; }
                         });
-                        if (closestId) { openNote(notes.find(n => n.id === closestId)); } 
+                        if (closestId) { setIsReadingFullScreen(false); handleAnemoneSelection(notes.find(n => n.id === closestId)); } 
                         else { setIsListOpen(false); setEvolveMode('none'); closeNote(); }
                     }}
                 >
@@ -589,7 +611,7 @@
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex flex-col">
                                 <div className="text-[10px] tracking-[0.3em] opacity-40 font-sans leading-tight">index</div>
-                                <div className={`text-[7px] font-sans mt-1 ${syncStatus.includes('private key') ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
+                                <div className={`text-[7px] font-sans mt-1 ${syncStatus === 'rate limited' ? 'text-red-500 font-bold uppercase' : 'opacity-25'}`}>status: {syncStatus}</div>
                             </div>
                             <div className="flex items-center gap-3">
                                 <button onClick={fetchFromReef} className="text-[9px] opacity-60 hover:opacity-100 font-sans underline underline-offset-4">sync</button>
@@ -620,7 +642,7 @@
                                         <input type="text" placeholder="title" value={newNoteTitle} onChange={(e) => setNewNoteTitle(e.target.value)} className="w-full bg-transparent border-b border-teal-900/20 text-teal-900 text-[12px] mb-2 p-1 font-sans focus:outline-none" />
                                         <textarea placeholder="content..." rows="3" value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} className="w-full bg-transparent border border-teal-900/10 text-teal-900 rounded-sm text-[11px] mb-2 p-2 font-serif focus:outline-none bg-white/40 custom-scrollbar" />
                                         <div className="flex gap-1">
-                                            <button onClick={attachOrAdaptToPermanent} className="flex-1 py-1 rounded-sm text-[9px] font-sans bg-teal-700 text-white">save</button>
+                                            <button onClick={handleEvolve} className="flex-1 py-1 rounded-sm text-[9px] font-sans bg-teal-700 text-white">save</button>
                                             <button onClick={() => setEvolveMode('menu')} className="px-2 py-1 text-[9px] opacity-40 uppercase">cancel</button>
                                         </div>
                                     </div>
@@ -640,24 +662,24 @@
                                 <button onClick={() => setSortMode('newest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'newest' ? 'bg-teal-900 text-white' : 'bg-teal-900/5 text-teal-900/40'}`}>newest</button>
                                 <button onClick={() => setSortMode('oldest')} className={`text-[7px] px-2 py-1 rounded-sm transition-all ${sortMode === 'oldest' ? 'bg-teal-900 text-white' : 'bg-teal-900/5 text-teal-900/40'}`}>oldest</button>
                             </div>
-                            <button onClick={() => { setIsReadAllMode(true); setIsListOpen(false); }} className="text-[7px] px-2 py-1 rounded-sm bg-teal-700/10 text-teal-900 hover:bg-teal-700 hover:text-white transition-all font-sans">read all</button>
+                            <button onClick={() => { setIsReadAllMode(true); setIsListOpen(false); }} className="text-[7px] px-2 py-1 rounded-sm bg-teal-700/10 text-teal-900 hover:bg-teal-700 hover:text-white transition-all font-sans text-[8px] uppercase tracking-widest">read all</button>
                         </div>
 
                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-1 mt-2">
                             {sortedNotes.map(note => (
                                 <div key={note.id} className="flex gap-1 items-center">
                                     <button 
-                                        onClick={() => openNote(note)} 
+                                        onClick={() => { if(evolveMode==='none') handleAnemoneSelection(note); }} 
                                         className={`flex-1 text-left p-2 rounded-sm text-[13px] transition-all font-dyslexic break-words hyphen-auto leading-tight 
                                             ${(evolveMode === 'cull' || evolveMode === 'adapt') ? 'opacity-30' : (selectedNote?.id === note.id ? 'bg-teal-900/5 text-teal-900 font-bold' : 'text-teal-900/60 hover:bg-teal-900/5')}`}
                                     >
                                         {note.title}
                                     </button>
                                     {evolveMode === 'cull' && (
-                                        <button onClick={() => cullFromPermanent(note)} className="px-2 py-1 rounded-sm border border-red-900/20 text-red-900/40 text-[8px] hover:bg-red-700 hover:text-white transition-all font-sans uppercase">cull</button>
+                                        <button onClick={() => cullFromPermanent(note)} className="px-2 py-1 rounded-sm border border-red-900/10 text-red-800/40 text-[8px] hover:bg-red-700 hover:text-white transition-all font-sans uppercase">cull</button>
                                     )}
                                     {evolveMode === 'adapt' && (
-                                        <button onClick={() => startAdapting(note)} className="px-2 py-1 rounded-sm border border-blue-900/20 text-blue-900/40 text-[8px] hover:bg-blue-700 hover:text-white transition-all font-sans uppercase">adapt</button>
+                                        <button onClick={() => startAdapting(note)} className="px-2 py-1 rounded-sm border border-blue-900/10 text-blue-900/40 text-[8px] hover:bg-blue-700 hover:text-white transition-all font-sans uppercase">adapt</button>
                                     )}
                                 </div>
                             ))}
@@ -670,10 +692,9 @@
 
                     <div className="absolute top-8 left-8 sm:top-12 sm:left-12 pointer-events-none z-20">
                         <h1 className="text-3xl sm:text-5xl tracking-[0.4em] font-light italic text-slate-800 leading-none font-serif uppercase">REEF</h1>
-                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-0.5 sm:mt-1 opacity-40 font-sans text-slate-800 lowercase">works by anna emerson</p>
+                        <p className="text-[7px] sm:text-[9px] tracking-[0.4em] mt-0.5 sm:mt-1 opacity-30 font-sans text-slate-800 lowercase">works by anna emerson</p>
                     </div>
 
-                    {/* READING PANEL (Individual) */}
                     <div 
                         onClick={(e) => e.stopPropagation()} 
                         className={`absolute z-[150] 
@@ -694,7 +715,7 @@
                             </div>
                             <div className={`flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar px-8 pb-24 sm:px-12`}>
                                 <div className="mb-8 text-center">
-                                    <h2 className="text-xl sm:text-2xl font-serif text-slate-950 leading-tight transition-all duration-500">{selectedNote?.title}</h2>
+                                    <h2 className="text-xl sm:text-2xl font-serif text-slate-950 leading-tight transition-all duration-500 break-words">{selectedNote?.title}</h2>
                                     <div className="h-[1px] w-8 mx-auto mt-6 bg-slate-900/10" />
                                 </div>
                                 <div className={`text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none hyphen-auto break-words transition-all duration-500`}>
@@ -704,7 +725,6 @@
                         </div>
                     </div>
 
-                    {/* READ ALL OVERLAY */}
                     <div className={`absolute inset-0 z-[160] transition-all duration-700 ease-[cubic-bezier(0.2,1,0.2,1)] bg-white/75 backdrop-blur-3xl overflow-y-auto custom-scrollbar ${isReadAllMode ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-full pointer-events-none'}`}>
                         <div className="max-w-xl mx-auto py-24 px-8 relative">
                             <button onClick={() => setIsReadAllMode(false)} className="fixed top-8 right-8 z-[170] text-[10px] uppercase tracking-widest px-4 py-2 rounded-full bg-white/50 border border-slate-200 text-slate-500 hover:text-slate-900 font-sans backdrop-blur-md">close all ✕</button>
@@ -712,7 +732,7 @@
                                 {sortedNotes.map(note => (
                                     <div key={note.id} className="relative">
                                         <div className="mb-6 opacity-40 text-[9px] tracking-widest uppercase font-sans border-b border-slate-100 pb-2 text-center">{note.date || "..."}</div>
-                                        <h2 className="text-xl sm:text-2xl font-serif text-slate-950 mb-6 text-center leading-tight">{note.title}</h2>
+                                        <h2 className="text-xl sm:text-2xl font-serif text-slate-950 mb-6 text-center leading-tight break-words">{note.title}</h2>
                                         <div className="text-slate-800 font-serif leading-relaxed text-xs sm:text-sm prose prose-slate max-w-none hyphen-auto break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(note.content) }} />
                                         <div className="mt-16 flex justify-center opacity-5"><div className="h-[1px] w-32 bg-slate-900" /></div>
                                     </div>
