@@ -1,3 +1,3 @@
 Diving into blue
-I think the bottom exists
-I'll try to touch it
+I'm told the bottom exists
+Let's try to touch it
