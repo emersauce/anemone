@@ -1,3 +1,3 @@
-How can few
-Become so so many
- The big sea body
+The big sea body
+A proud undercurrent 
+Is so so many
