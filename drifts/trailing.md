@@ -1,3 +1,3 @@
 Trailing the fin
-There is a little ceremony
+Is a raucous ceremony
 Of water marriage
