@@ -1,3 +1,3 @@
-taller than forever
-varies in day and night
-surface stretch outward
+How can few
+Become so so many
+ The big sea body
