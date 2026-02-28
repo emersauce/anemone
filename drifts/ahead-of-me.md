@@ -1,3 +1,3 @@
 ahead of me is
-a nice bright parrotfish
+a flashy nude parrotfish
 munch munch munch
