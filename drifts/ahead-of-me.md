@@ -1,3 +1,3 @@
 ahead of me is
-a bright big parrotfish
+a nice bright parrotfish
 munch munch munch
