@@ -1,3 +1,3 @@
-ahead of me is
+ahead of us is
 a flashy nude parrotfish
 munch munch munch
